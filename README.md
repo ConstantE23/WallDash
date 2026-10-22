@@ -43,6 +43,10 @@ Security policies, the profile-creation trigger, the realtime publication, and t
 `signage-media` storage bucket, then seeds the initial signage state. See
 [`DATABASE_SCHEMA.md`](DATABASE_SCHEMA.md) for details.
 
+Then run [`supabase/migrations/0002_validate_lab_hours.sql`](supabase/migrations/0002_validate_lab_hours.sql)
+the same way. It makes the database reject lab hours that aren't `Closed` or
+`h:mm AM – h:mm PM` (hours 1–12, minutes 00–59).
+
 **Recommended:** in Supabase → Authentication → Sign In / Providers, turn off
 **Allow new users to sign up**. New accounts get no role and can't change anything until an
 admin approves them, but switching sign-ups off avoids stray accounts.

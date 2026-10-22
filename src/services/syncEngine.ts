@@ -11,7 +11,7 @@ import type {
   LabClassSession,
 } from "../types/signage"
 import type { RealtimeChannel } from "@supabase/supabase-js"
-import { INITIAL_STATE, INITIAL_SLIDES } from "../data/initialData"
+import { INITIAL_STATE, INITIAL_SLIDES, getTutorCourses } from "../data/initialData"
 import {
   saveMedia,
   getMediaUrl,
@@ -22,6 +22,7 @@ import { getUserDatabase } from "./userDatabase"
 import { getDatabaseConnection } from "./dbConnection"
 import { supabase } from "./supabaseClient"
 import type { ActionLogCategory } from "../types/signage"
+import { isValidLabHours } from "../utils/labHours"
 
 // localStorage key: shared state in fallback mode, offline cache of the last good
 // Supabase state otherwise (so a screen keeps showing content if the network drops).
@@ -546,6 +547,20 @@ export class SyncEngine {
     const existingLab = this.currentState.labs[labId]
     if (!existingLab) return
 
+    // Refuse malformed hours; Supabase enforces the same rule (0002_validate_lab_hours.sql).
+    if (changes.hours) {
+      const previous = existingLab.hours as Record<string, string | undefined>
+      const bad = Object.entries(changes.hours).find(
+        ([key, h]) =>
+          h !== previous[key] && (typeof h !== "string" || !isValidLabHours(h)),
+      )
+      if (bad) {
+        console.warn(`Rejected invalid lab hours for ${labId}.${bad[0]}:`, bad[1])
+        this.notifyNotification(`Invalid hours "${bad[1]}" were not saved.`, "alert")
+        return
+      }
+    }
+
     const updatedLab: LabInfo = {
       ...existingLab,
       ...changes,
@@ -984,6 +999,44 @@ export class SyncEngine {
     }
 
     this.commitState(newState)
+  }
+
+  public addTutorCourse(name: string) {
+    const course = name.trim()
+    const courses = getTutorCourses(this.currentState)
+    if (!course || courses.some((c) => c.toLowerCase() === course.toLowerCase())) return
+
+    this.commitState({
+      ...this.currentState,
+      version: this.currentState.version + 1,
+      tutorCourses: [...courses, course],
+      lastAction: {
+        type: "UPDATE_TUTOR_COURSES",
+        byClient: this.clientName,
+        clientRole: this.clientRole,
+        timestamp: Date.now(),
+        description: `Added tutoring course "${course}"`,
+      },
+    })
+  }
+
+  public removeTutorCourse(name: string) {
+    const courses = getTutorCourses(this.currentState)
+    const remaining = courses.filter((c) => c !== name)
+    if (remaining.length === courses.length || remaining.length === 0) return
+
+    this.commitState({
+      ...this.currentState,
+      version: this.currentState.version + 1,
+      tutorCourses: remaining,
+      lastAction: {
+        type: "UPDATE_TUTOR_COURSES",
+        byClient: this.clientName,
+        clientRole: this.clientRole,
+        timestamp: Date.now(),
+        description: `Removed tutoring course "${name}"`,
+      },
+    })
   }
 
   public resetSlidesToDefault() {

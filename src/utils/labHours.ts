@@ -36,6 +36,47 @@ export function timeStringToMinutes(timeStr: string): number | null {
   return hour * 60 + minute
 }
 
+export type Period = "AM" | "PM"
+
+/** Separator used between opening and closing time, e.g. "8:00 AM – 10:00 PM". */
+export const HOURS_SEPARATOR = " – "
+
+/** Canonical 12-hour time, e.g. formatTime(8, 5, "AM") → "8:05 AM". */
+export function formatTime(hour12: number, minute: number, period: Period): string {
+  return `${hour12}:${minute.toString().padStart(2, "0")} ${period}`
+}
+
+/** Splits "8:05 AM" into parts; null unless hours are 1–12 and minutes 0–59. */
+export function parseTimeParts(
+  timeStr: string,
+): { hour: number; minute: number; period: Period } | null {
+  const match = timeStr?.trim().toUpperCase().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/)
+  if (!match) return null
+  const hour = parseInt(match[1], 10)
+  const minute = parseInt(match[2], 10)
+  if (hour < 1 || hour > 12 || minute > 59) return null
+  return { hour, minute, period: match[3] as Period }
+}
+
+/** Returns the canonical form of a valid time string, or null if it's invalid. */
+export function normalizeTimeString(timeStr: string): string | null {
+  const parts = parseTimeParts(timeStr)
+  return parts ? formatTime(parts.hour, parts.minute, parts.period) : null
+}
+
+/**
+ * Lab hours must be "Closed" or "h:mm AM – h:mm PM" with valid, different times.
+ * Mirrors public.is_valid_lab_hours() in supabase/migrations/0002_validate_lab_hours.sql.
+ */
+export function isValidLabHours(hours: string): boolean {
+  if (hours === "Closed") return true
+  const parts = hours.split(HOURS_SEPARATOR)
+  if (parts.length !== 2) return false
+  const start = normalizeTimeString(parts[0])
+  const end = normalizeTimeString(parts[1])
+  return start === parts[0] && end === parts[1] && start !== end
+}
+
 /**
  * Checks if current time is within a specific start and end time.
  */
@@ -97,8 +138,8 @@ export function parseLabHoursRange(hoursStr: string): ParsedHoursRange {
     if (startMins !== null && endMins !== null) {
       return {
         isClosed: false,
-        start: matchNearestInterval(rawStart, "8:00 AM"),
-        end: matchNearestInterval(rawEnd, "10:00 PM"),
+        start: normalizeTimeString(rawStart) || "8:00 AM",
+        end: normalizeTimeString(rawEnd) || "10:00 PM",
         startMinutes: startMins,
         endMinutes: endMins,
       }
