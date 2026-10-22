@@ -19,6 +19,53 @@ import {
 import type { SlideItem, UrgentAlert } from "../types/signage"
 import { INITIAL_SLIDES } from "../data/initialData"
 
+/**
+ * Slide video that only plays while visible. The next slide's video preloads once
+ * (preload="auto"); all others stay unloaded (preload="none") until they're up next.
+ * Once loaded, the element keeps its buffer, so each screen downloads a clip once
+ * and the browser HTTP cache (immutable, 1-year Cache-Control) serves any reload.
+ */
+function SlideVideo({
+  src,
+  isActive,
+  shouldPreload,
+  className,
+}: {
+  src: string
+  isActive: boolean
+  shouldPreload: boolean
+  className: string
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const [hasRequested, setHasRequested] = useState(isActive || shouldPreload)
+
+  useEffect(() => {
+    if (isActive || shouldPreload) setHasRequested(true)
+  }, [isActive, shouldPreload])
+
+  useEffect(() => {
+    const el = videoRef.current
+    if (!el) return
+    if (isActive) {
+      el.play().catch(() => {})
+    } else {
+      el.pause()
+    }
+  }, [isActive, hasRequested])
+
+  return (
+    <video
+      ref={videoRef}
+      src={src}
+      preload={hasRequested ? "auto" : "none"}
+      muted
+      loop
+      playsInline
+      className={className}
+    />
+  )
+}
+
 interface CenterDisplayProps {
   slides?: SlideItem[]
   activeSlideIndex: number
@@ -243,12 +290,13 @@ export default function CenterDisplay({
                     ) : null}
 
                     {isVideo ? (
-                      <video
+                      <SlideVideo
                         src={slide.url}
-                        autoPlay
-                        muted
-                        loop
-                        playsInline
+                        isActive={idx === activeSlideIndex}
+                        shouldPreload={
+                          slides.length > 1 &&
+                          idx === (activeSlideIndex + 1) % slides.length
+                        }
                         className={`relative z-10 w-full h-full ${
                           isCover ? "object-cover" : "object-contain max-h-[85vh]"
                         } select-none pointer-events-none transition-all duration-300`}
