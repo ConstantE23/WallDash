@@ -1,17 +1,9 @@
 import React, { useState } from "react"
-import {
-  Lock,
-  Mail,
-  KeyRound,
-  Tv,
-  ArrowRight,
-  AlertCircle,
-  GraduationCap,
-  Sparkles,
-} from "lucide-react"
+import { Tv } from "lucide-react"
 import { getUserDatabase, LOCAL_MODE_AVAILABLE } from "../services/userDatabase"
 import { isSupabaseConfigured } from "../services/supabaseClient"
 import type { SignageUser } from "../types/signage"
+import { ui } from "./manageStyles"
 
 interface ManageLoginPageProps {
   onLoginSuccess: (user: SignageUser) => void
@@ -71,149 +63,107 @@ export default function ManageLoginPage({
   }
 
   return (
-    <div className="min-h-screen w-screen bg-[#070e1e] flex flex-col justify-between select-none font-sans text-white relative overflow-y-auto">
-      {/* Background Accent Gradients */}
-      <div className="absolute inset-0 bg-radial from-[#02275A]/40 via-transparent to-transparent pointer-events-none" />
-
-      {/* Top University Banner */}
-      <header className="flex-shrink-0 bg-[#02275A] border-b border-[#02275A]/60 px-6 py-4 flex items-center justify-between shadow-lg z-10">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center border border-white/20 shadow-inner">
-            <GraduationCap className="w-6 h-6 text-white" />
-          </div>
-          <div>
-            <h1 className="text-white font-black text-sm sm:text-base uppercase tracking-wider">
-              Hampton University
-            </h1>
-            <p className="text-sky-200/90 text-xs font-semibold">
-              Department of Computer Science · Signage Administration
-            </p>
-          </div>
-        </div>
-
-        <button
-          onClick={onNavigateToTv}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition-all border border-white/20 cursor-pointer shadow-sm"
-        >
-          <Tv className="w-4 h-4 text-emerald-400" />
-          <span>Public TV Display</span>
+    <div className="min-h-screen w-screen flex flex-col bg-slate-50 font-sans text-slate-900 antialiased">
+      <header className="flex h-14 flex-shrink-0 items-center justify-end border-b border-slate-200 bg-white px-4 sm:px-6">
+        <button type="button" onClick={onNavigateToTv} className={ui.btnSecondary}>
+          <Tv className="w-4 h-4" />
+          <span className="hidden sm:inline">TV display</span>
         </button>
       </header>
 
-      {/* Central Login Card */}
-      <main className="flex-1 flex items-center justify-center p-4 sm:p-6 z-10">
-        <div className="w-full max-w-md bg-slate-900/95 border border-slate-800 rounded-3xl shadow-2xl p-6 sm:p-8 backdrop-blur-xl space-y-6">
-          <div className="text-center space-y-1.5">
-            <div className="w-14 h-14 rounded-2xl bg-[#02275A] text-white flex items-center justify-center mx-auto shadow-xl border border-sky-400/20 mb-3">
-              <Lock className="w-7 h-7" />
-            </div>
-            <h2 className="text-xl sm:text-2xl font-black text-white tracking-wide">
-              Staff Portal Login
-            </h2>
-            <p className="text-xs text-slate-400">
-              Sign in with authorized faculty or staff credentials to manage lab schedules, events, and TV slides.
+      <main className="flex flex-1 items-center justify-center p-4">
+        <div className="w-full max-w-sm space-y-5">
+          <div className="text-center">
+            <h1 className="text-xl font-semibold">Sign in to manage the TV screens</h1>
+            <p className="mt-1 text-sm text-slate-500">
+              Use your staff email and password.
             </p>
           </div>
 
-          {notice && !errorMsg && (
-            <div className="p-3 rounded-xl bg-amber-950/60 border border-amber-500/40 text-amber-200 text-xs flex items-center gap-2.5">
-              <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0" />
-              <span>{notice}</span>
-            </div>
-          )}
+          <div className={`${ui.card} p-5 space-y-4`}>
+            {notice && !errorMsg && (
+              <div className={ui.noticeWarn} role="status">
+                {notice}
+              </div>
+            )}
 
-          {!supabaseReady && !LOCAL_MODE_AVAILABLE && (
-            <div className="p-3 rounded-xl bg-red-950/70 border border-red-500/40 text-red-200 text-xs flex items-center gap-2.5">
-              <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
-              <span>
+            {!supabaseReady && !LOCAL_MODE_AVAILABLE && (
+              <div className={ui.noticeError} role="alert">
                 Sign-in is unavailable: Supabase is not configured for this deployment.
-              </span>
-            </div>
-          )}
+              </div>
+            )}
 
-          {errorMsg && (
-            <div className="p-3 rounded-xl bg-red-950/70 border border-red-500/40 text-red-200 text-xs flex items-center gap-2.5 animate-shake">
-              <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
-              <span>{errorMsg}</span>
-            </div>
-          )}
+            {errorMsg && (
+              <div className={ui.noticeError} role="alert">
+                {errorMsg}
+              </div>
+            )}
 
-          <form onSubmit={handleFormSubmit} className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-                Email
-              </label>
-              <div className="relative">
-                <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+            <form onSubmit={handleFormSubmit} className="space-y-4">
+              <div>
+                <label className={ui.label} htmlFor="login-email">
+                  Email
+                </label>
                 <input
+                  id="login-email"
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="e.g. jdoe@hamptonu.edu"
                   autoComplete="username"
-                  className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 focus:border-[#02275A] focus:outline-none focus:ring-1 focus:ring-sky-500 text-sm text-white placeholder-slate-500 transition-all font-mono"
+                  autoFocus
+                  className={ui.input}
                 />
               </div>
-            </div>
 
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-                Password
-              </label>
-              <div className="relative">
-                <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <div>
+                <label className={ui.label} htmlFor="login-password">
+                  Password
+                </label>
                 <input
+                  id="login-password"
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Your account password"
                   autoComplete="current-password"
-                  className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 focus:border-[#02275A] focus:outline-none focus:ring-1 focus:ring-sky-500 text-sm text-white placeholder-slate-500 transition-all font-mono"
+                  className={ui.input}
                 />
               </div>
-            </div>
 
-            <button
-              type="submit"
-              disabled={isLoading || !supabaseReady}
-              className="w-full py-3 px-4 rounded-xl bg-[#02275A] hover:bg-[#03367d] text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-xl shadow-[#02275A]/30 transition-all cursor-pointer active:scale-[0.98] border border-sky-400/30 disabled:opacity-50"
-            >
-              {isLoading ? (
-                <span>Authenticating...</span>
-              ) : (
-                <>
-                  <span>Sign In to Controller</span>
-                  <ArrowRight className="w-4 h-4" />
-                </>
-              )}
-            </button>
-          </form>
-
-          {/* Local dev fallback (only when Supabase isn't configured in a dev build) */}
-          {LOCAL_MODE_AVAILABLE && (
-            <div className="border-t border-slate-800/80 pt-5 space-y-3">
-              <span className="text-[11px] font-extrabold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                <span>Supabase not configured · Local dev mode</span>
-              </span>
               <button
-                onClick={handleLocalLogin}
-                disabled={isLoading}
-                className="w-full p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800/80 border border-slate-800/80 hover:border-slate-700 flex items-center justify-between text-left transition-all cursor-pointer group disabled:opacity-50"
+                type="submit"
+                disabled={isLoading || !supabaseReady}
+                className={`${ui.btnPrimary} w-full`}
               >
-                <span className="text-xs font-bold text-white group-hover:text-sky-300 transition-colors">
-                  Continue as local administrator (this browser only)
-                </span>
-                <ArrowRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-white group-hover:translate-x-0.5 transition-all flex-shrink-0 ml-2" />
+                {isLoading ? "Signing in…" : "Sign in"}
               </button>
-            </div>
-          )}
+            </form>
+
+            {/* Local dev fallback (only when Supabase isn't configured in a dev build) */}
+            {LOCAL_MODE_AVAILABLE && (
+              <div className="space-y-2 border-t border-slate-100 pt-4">
+                <p className={ui.hint}>
+                  Supabase isn't configured, so this dev build stores data in this browser only.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleLocalLogin}
+                  disabled={isLoading}
+                  className={`${ui.btnSecondary} w-full`}
+                >
+                  Continue as local administrator
+                </button>
+              </div>
+            )}
+          </div>
+
+          <p className="text-center text-xs text-slate-500">
+            Need an account? Ask a signage administrator.
+          </p>
         </div>
       </main>
 
-      {/* Footer */}
-      <footer className="p-4 text-center text-xs text-slate-500 flex-shrink-0">
-        Hampton University Department of Computer Science · Wigwam Hall
+      <footer className="p-4 text-center text-xs text-slate-400">
+        Hampton University Department of Computer Science
       </footer>
     </div>
   )

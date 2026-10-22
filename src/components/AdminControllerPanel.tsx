@@ -107,10 +107,7 @@ export default function AdminControllerPanel({
   isInline = false,
 }: AdminControllerPanelProps) {
   // Alert form state
-  const [alertText, setAlertText] = useState(
-    state.urgentAlert?.message ||
-      "ACM Hackathon kickoff tonight at 6:00 PM in Wigwam Hall!",
-  )
+  const [alertText, setAlertText] = useState(state.urgentAlert?.message || "")
   const [alertLevel, setAlertLevel] =
     useState<"info" | "warning" | "emergency">("info")
 
@@ -119,7 +116,7 @@ export default function AdminControllerPanel({
   const [eventTitle, setEventTitle] = useState("")
   const [eventDate, setEventDate] = useState("FRI, OCT 10")
   const [eventTime, setEventTime] = useState("3:00 PM – 5:00 PM")
-  const [eventLocation, setEventLocation] = useState("Wigwam, Rm 126")
+  const [eventLocation, setEventLocation] = useState("")
   const [eventCategory, setEventCategory] =
     useState<EventAnnouncement["category"]>("Workshop")
   const [eventDescription, setEventDescription] = useState("")

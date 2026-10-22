@@ -1,36 +1,26 @@
 import React, { useRef, useState, useEffect } from "react"
 import {
   Tv,
-  ExternalLink,
-  Sliders,
-  Users,
-  CheckCircle2,
-  RefreshCw,
-  Send,
-  AlertTriangle,
-  Play,
-  Pause,
+  Eye,
+  Crop,
+  LogOut,
+  ShieldCheck,
   Plus,
   Trash2,
-  Clock,
-  MapPin,
-  Split,
-  Eye,
-  Layers,
+  Pencil,
+  ArrowUp,
+  ArrowDown,
   Upload,
   Video,
   Image as ImageIcon,
-  ArrowUp,
-  ArrowDown,
-  RotateCcw,
-  GraduationCap,
-  Pencil,
-  User,
-  Calendar,
+  Play,
+  Pause,
   X,
-  LogOut,
-  ShieldCheck,
-  Lock,
+  Images,
+  CalendarDays,
+  Building2,
+  GraduationCap,
+  Megaphone,
 } from "lucide-react"
 import type {
   SignageState,
@@ -45,9 +35,7 @@ import type {
 } from "../types/signage"
 import { SyncEngine } from "../services/syncEngine"
 import { parseIcs } from "../utils/ics"
-import EventAnnouncements from "./EventAnnouncements"
-import CenterDisplay from "./CenterDisplay"
-import RightPanel from "./RightPanel"
+import TvPreviewPanel from "./TvPreviewPanel"
 import LabHoursIntervalPicker from "./LabHoursIntervalPicker"
 import { getEffectiveLabStatus } from "../utils/labHours"
 import LabClassScheduleManager from "./LabClassScheduleManager"
@@ -55,50 +43,51 @@ import { getUserDatabase } from "../services/userDatabase"
 import { uploadSlideMedia, validateMediaFile } from "../services/mediaStorage"
 import ManageLoginPage from "./ManageLoginPage"
 import AdminPortalModal from "./AdminPortalModal"
+import { ui, segment } from "./manageStyles"
+import { getTutorCourses } from "../data/initialData"
 
-function HoursField({
-  label,
-  value,
-  onCommit,
-}: {
-  label: string
-  value: string
-  onCommit: (val: string) => void
-}) {
-  const [currentVal, setCurrentVal] = useState(value)
+type Section = "slides" | "preview" | "events" | "labs" | "tutoring" | "alert"
 
-  useEffect(() => {
-    setCurrentVal(value)
-  }, [value])
+const WEEKDAYS: WeekDay[] = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+const DAY_NAMES: Record<WeekDay, string> = {
+  Mon: "Monday",
+  Tue: "Tuesday",
+  Wed: "Wednesday",
+  Thu: "Thursday",
+  Fri: "Friday",
+}
+const EVENT_CATEGORIES: EventAnnouncement["category"][] = [
+  "Capstone",
+  "Workshop",
+  "Club",
+  "Lecture",
+  "Career",
+  "Hackathon",
+]
+const SLIDE_CATEGORIES = [
+  "Campus Announcement",
+  "Club Announcement",
+  "Department Spotlight",
+  "Industry Partner",
+  "Campus Facilities",
+  "Student Showcase",
+  "Career & Research",
+]
+type TutorDays = Record<WeekDay, { enabled: boolean; time: string }>
 
-  const handleBlur = () => {
-    if (currentVal.trim() !== value) {
-      onCommit(currentVal.trim())
-    }
+function emptyTutorDays(): TutorDays {
+  return {
+    Mon: { enabled: true, time: "" },
+    Tue: { enabled: false, time: "" },
+    Wed: { enabled: false, time: "" },
+    Thu: { enabled: false, time: "" },
+    Fri: { enabled: false, time: "" },
   }
+}
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
-      e.currentTarget.blur()
-    }
-  }
-
-  return (
-    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-slate-800/80 p-2.5 rounded-xl border border-slate-700/70">
-      <span className="text-xs font-bold text-slate-300 w-24 flex-shrink-0">
-        {label}:
-      </span>
-      <input
-        type="text"
-        value={currentVal}
-        onChange={(e) => setCurrentVal(e.target.value)}
-        onBlur={handleBlur}
-        onKeyDown={handleKeyDown}
-        placeholder="e.g. 8:00 AM – 10:00 PM"
-        className="flex-1 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-[#02275A] font-mono"
-      />
-    </div>
-  )
+const LAB_TITLES: Record<number, string> = {
+  126: "Lab 126 · Computer Lab",
+  127: "Lab 127 · Senior Design & Tutoring",
 }
 
 interface ManagePageProps {
@@ -166,19 +155,16 @@ export default function ManagePage({
   }
 
   // Alert form state
-  const [alertText, setAlertText] = useState(
-    state.urgentAlert?.message ||
-      "ACM Hackathon kickoff tonight at 6:00 PM in Wigwam Hall!",
-  )
+  const [alertText, setAlertText] = useState(state.urgentAlert?.message || "")
   const [alertLevel, setAlertLevel] =
     useState<"info" | "warning" | "emergency">("info")
 
   // New Event form state
   const [showAddEvent, setShowAddEvent] = useState(false)
   const [eventTitle, setEventTitle] = useState("")
-  const [eventDate, setEventDate] = useState("FRI, OCT 10")
-  const [eventTime, setEventTime] = useState("3:00 PM – 5:00 PM")
-  const [eventLocation, setEventLocation] = useState("Wigwam, Rm 126")
+  const [eventDate, setEventDate] = useState("")
+  const [eventTime, setEventTime] = useState("")
+  const [eventLocation, setEventLocation] = useState("")
   const [eventCategory, setEventCategory] =
     useState<EventAnnouncement["category"]>("Workshop")
   const [eventDescription, setEventDescription] = useState("")
@@ -195,8 +181,9 @@ export default function ManagePage({
   const [editEventDescription, setEditEventDescription] = useState("")
   const [editEventIsToday, setEditEventIsToday] = useState(false)
 
-  // Live TV Preview toggle
-  const [showLivePreview, setShowLivePreview] = useState(false)
+  // Current console section; previewSlideId picks the slide the Preview opens on
+  const [section, setSection] = useState<Section>("slides")
+  const [previewSlideId, setPreviewSlideId] = useState<string | null>(null)
 
   // Media (Photos & Videos) upload state
   const [showAddMedia, setShowAddMedia] = useState(false)
@@ -237,19 +224,11 @@ export default function ManagePage({
   const [showAddTutor, setShowAddTutor] = useState(false)
   const [editingTutorOriginalName, setEditingTutorOriginalName] =
     useState<string | null>(null)
+  const tutorCourses = getTutorCourses(state)
   const [tutorName, setTutorName] = useState("")
-  const [tutorCourse, setTutorCourse] = useState("151 & 152")
-  const [tutorDays, setTutorDays] = useState<Record<WeekDay, {
-    enabled: boolean
-    time: string
-    course: string
-  }>>({
-    Mon: { enabled: true, time: "", course: "151 & 152" },
-    Tue: { enabled: false, time: "", course: "151 & 152" },
-    Wed: { enabled: false, time: "", course: "151 & 152" },
-    Thu: { enabled: false, time: "", course: "151 & 152" },
-    Fri: { enabled: false, time: "", course: "151 & 152" },
-  })
+  const [tutorCourse, setTutorCourse] = useState(tutorCourses[0])
+  const [tutorDays, setTutorDays] = useState<TutorDays>(emptyTutorDays())
+  const [newCourseName, setNewCourseName] = useState("")
 
   const lab126 = state.labs[126]
   const lab127 = state.labs[127]
@@ -349,9 +328,7 @@ export default function ManagePage({
       })
 
       setMediaUploadSuccess(
-        `Fed to database & published ${
-          mediaType === "video" ? "video" : "photo"
-        } "${mediaTitle}"! Now live on TV.`,
+        `"${mediaTitle.trim()}" was added to the slideshow.`,
       )
       setMediaFile(null)
       setMediaPreviewUrl(null)
@@ -385,7 +362,7 @@ export default function ManagePage({
 
   const handleDeleteSlide = async (slideId: string) => {
     if (
-      confirm("Are you sure you want to remove this slide from the TV display?")
+      confirm("Remove this slide from the slideshow? The file will be deleted.")
     ) {
       await engine.removeSlide(slideId)
     }
@@ -394,41 +371,20 @@ export default function ManagePage({
   const handleStartAddTutor = () => {
     setEditingTutorOriginalName(null)
     setTutorName("")
-    setTutorCourse("151 & 152")
-    setTutorDays({
-      Mon: { enabled: true, time: "", course: "151 & 152" },
-      Tue: { enabled: false, time: "", course: "151 & 152" },
-      Wed: { enabled: false, time: "", course: "151 & 152" },
-      Thu: { enabled: false, time: "", course: "151 & 152" },
-      Fri: { enabled: false, time: "", course: "151 & 152" },
-    })
+    setTutorCourse(tutorCourses[0])
+    setTutorDays(emptyTutorDays())
     setShowAddTutor(true)
   }
 
   const handleStartEditTutor = (name: string, shifts: TutorShift[]) => {
     setEditingTutorOriginalName(name)
     setTutorName(name)
-    const primaryCourse = shifts[0]?.course || "Intro to Programming (151)"
-    setTutorCourse(primaryCourse)
+    setTutorCourse(shifts[0]?.course || tutorCourses[0])
 
-    const newDays: Record<WeekDay, {
-      enabled: boolean
-      time: string
-      course: string
-    }> = {
-      Mon: { enabled: false, time: "", course: primaryCourse },
-      Tue: { enabled: false, time: "", course: primaryCourse },
-      Wed: { enabled: false, time: "", course: primaryCourse },
-      Thu: { enabled: false, time: "", course: primaryCourse },
-      Fri: { enabled: false, time: "", course: primaryCourse },
-    }
-
+    const newDays = emptyTutorDays()
+    newDays.Mon.enabled = false
     shifts.forEach((s) => {
-      newDays[s.day] = {
-        enabled: true,
-        time: s.time,
-        course: s.course,
-      }
+      newDays[s.day] = { enabled: true, time: s.time }
     })
 
     setTutorDays(newDays)
@@ -439,20 +395,17 @@ export default function ManagePage({
     e.preventDefault()
     if (!tutorName.trim()) return
 
+    // Every day uses the tutor's course
     const daysToSave: { day: WeekDay; course: string; time: string }[] = []
-    ;(["Mon", "Tue", "Wed", "Thu", "Fri"] as WeekDay[]).forEach((d) => {
+    WEEKDAYS.forEach((d) => {
       const entry = tutorDays[d]
       if (entry.enabled && entry.time.trim()) {
-        daysToSave.push({
-          day: d,
-          course: entry.course || tutorCourse,
-          time: entry.time.trim(),
-        })
+        daysToSave.push({ day: d, course: tutorCourse, time: entry.time.trim() })
       }
     })
 
     if (daysToSave.length === 0) {
-      alert("Please enable at least one day and enter their times.")
+      alert("Turn on at least one day and enter the hours.")
       return
     }
 
@@ -466,6 +419,30 @@ export default function ManagePage({
     setShowAddTutor(false)
     setTutorName("")
     setEditingTutorOriginalName(null)
+  }
+
+  const handleAddCourse = (e: React.FormEvent) => {
+    e.preventDefault()
+    const name = newCourseName.trim()
+    if (!name) return
+    if (tutorCourses.some((c) => c.toLowerCase() === name.toLowerCase())) {
+      alert(`"${name}" is already in the list.`)
+      return
+    }
+    engine.addTutorCourse(name)
+    setNewCourseName("")
+  }
+
+  const handleRemoveCourse = (course: string) => {
+    const inUse = new Set(
+      (lab127?.tutorShifts || [])
+        .filter((s) => s.course === course)
+        .map((s) => s.tutorName),
+    ).size
+    const message = inUse
+      ? `Remove "${course}"? ${inUse} tutor${inUse === 1 ? " is" : "s are"} still assigned to it and will keep showing it until you edit them.`
+      : `Remove "${course}" from the course list?`
+    if (confirm(message)) engine.removeTutorCourse(course)
   }
 
   const handleDeleteTutor = (tutorToDelete: string) => {
@@ -557,7 +534,11 @@ export default function ManagePage({
       description: eventDescription.trim() || undefined,
     })
     setEventTitle("")
+    setEventDate("")
+    setEventTime("")
+    setEventLocation("")
     setEventDescription("")
+    setEventIsToday(false)
     setShowAddEvent(false)
   }
 
@@ -614,10 +595,10 @@ export default function ManagePage({
   // Auth gate: Display loading or login page if not authenticated
   if (isAuthChecking) {
     return (
-      <div className="w-screen h-screen flex items-center justify-center bg-[#070e1e] text-white select-none">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 rounded-full border-2 border-sky-400 border-t-transparent animate-spin" />
-          <span className="text-xs text-slate-400 font-mono">Verifying staff credentials...</span>
+      <div className="w-screen h-screen flex items-center justify-center bg-slate-50">
+        <div className="flex items-center gap-3 text-sm text-slate-500">
+          <div className="w-5 h-5 rounded-full border-2 border-[#02275A] border-t-transparent animate-spin" />
+          <span>Checking your session…</span>
         </div>
       </div>
     )
@@ -636,1672 +617,1400 @@ export default function ManagePage({
     )
   }
 
-  return (
-    <div className="w-screen h-screen flex flex-col bg-[#070e1e] text-white overflow-hidden select-none font-sans">
-      <header className="flex-shrink-0 h-16 bg-[#02275A] border-b border-[#02275A]/40 px-4 sm:px-6 flex items-center justify-between shadow-lg">
-        {/* Left Side: Hampton CS & Active User Badge */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2.5">
-            <div
-              className="w-9 h-9 rounded-xl flex items-center justify-center font-black text-sm text-white shadow-md border border-white/20 flex-shrink-0"
-              style={{ backgroundColor: authenticatedUser.avatarColor || "#02275A" }}
+  const isAdmin = db.isAdmin(authenticatedUser)
+  const slides = state.slides || []
+
+  const navItems: {
+    id: Section
+    label: string
+    icon: React.ComponentType<{ className?: string }>
+    meta?: React.ReactNode
+  }[] = [
+    {
+      id: "slides",
+      label: "Slides",
+      icon: Images,
+      meta: <span className="text-xs text-slate-400">{slides.length}</span>,
+    },
+    { id: "preview", label: "Preview & layout", icon: Eye },
+    {
+      id: "events",
+      label: "Events",
+      icon: CalendarDays,
+      meta: <span className="text-xs text-slate-400">{state.events.length}</span>,
+    },
+    { id: "labs", label: "Labs & hours", icon: Building2 },
+    { id: "tutoring", label: "Tutoring", icon: GraduationCap },
+    {
+      id: "alert",
+      label: "Alert banner",
+      icon: Megaphone,
+      meta: state.urgentAlert?.active ? (
+        <span className={`${ui.badge} bg-red-100 text-red-700`}>On</span>
+      ) : undefined,
+    },
+  ]
+
+  const renderSectionHeader = (
+    title: string,
+    description: string,
+    actions?: React.ReactNode,
+  ) => (
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h1 className="text-xl font-semibold text-slate-900">{title}</h1>
+        <p className="mt-1 text-sm text-slate-500">{description}</p>
+      </div>
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+    </div>
+  )
+
+  const renderNotice = (
+    kind: "ok" | "error" | "warn",
+    text: React.ReactNode,
+    onDismiss?: () => void,
+  ) => (
+    <div
+      className={
+        kind === "ok" ? ui.noticeOk : kind === "error" ? ui.noticeError : ui.noticeWarn
+      }
+      role={kind === "error" ? "alert" : "status"}
+    >
+      <span>{text}</span>
+      {onDismiss && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="flex-shrink-0 opacity-60 hover:opacity-100 cursor-pointer"
+          aria-label="Dismiss"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      )}
+    </div>
+  )
+
+  // Shared add/edit event fields. Called as a function (not a component) so inputs keep focus.
+  const renderEventFields = (
+    idPrefix: string,
+    v: {
+      title: string
+      date: string
+      time: string
+      location: string
+      category: EventAnnouncement["category"]
+      description: string
+      isToday: boolean
+    },
+    set: {
+      title: (val: string) => void
+      date: (val: string) => void
+      time: (val: string) => void
+      location: (val: string) => void
+      category: (val: EventAnnouncement["category"]) => void
+      description: (val: string) => void
+      isToday: (val: boolean) => void
+    },
+  ) => (
+    <>
+      <div>
+        <label className={ui.label} htmlFor={`${idPrefix}-title`}>
+          Title
+        </label>
+        <input
+          id={`${idPrefix}-title`}
+          type="text"
+          required
+          placeholder="Coding interview workshop"
+          value={v.title}
+          onChange={(e) => set.title(e.target.value)}
+          className={ui.input}
+        />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label className={ui.label} htmlFor={`${idPrefix}-date`}>
+            Date
+          </label>
+          <input
+            id={`${idPrefix}-date`}
+            type="text"
+            required
+            placeholder="Fri, Oct 10"
+            value={v.date}
+            onChange={(e) => set.date(e.target.value)}
+            className={ui.input}
+          />
+        </div>
+        <div>
+          <label className={ui.label} htmlFor={`${idPrefix}-time`}>
+            Time
+          </label>
+          <input
+            id={`${idPrefix}-time`}
+            type="text"
+            required
+            placeholder="3:00 PM – 5:00 PM"
+            value={v.time}
+            onChange={(e) => set.time(e.target.value)}
+            className={ui.input}
+          />
+        </div>
+        <div>
+          <label className={ui.label} htmlFor={`${idPrefix}-location`}>
+            Location
+          </label>
+          <input
+            id={`${idPrefix}-location`}
+            type="text"
+            required
+            placeholder="Room 126"
+            value={v.location}
+            onChange={(e) => set.location(e.target.value)}
+            className={ui.input}
+          />
+        </div>
+        <div>
+          <label className={ui.label} htmlFor={`${idPrefix}-category`}>
+            Category
+          </label>
+          <select
+            id={`${idPrefix}-category`}
+            value={v.category}
+            onChange={(e) =>
+              set.category(e.target.value as EventAnnouncement["category"])
+            }
+            className={`${ui.select} w-full`}
+          >
+            {EVENT_CATEGORIES.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      <div>
+        <label className={ui.label} htmlFor={`${idPrefix}-description`}>
+          Description <span className="font-normal text-slate-500">(optional)</span>
+        </label>
+        <textarea
+          id={`${idPrefix}-description`}
+          rows={2}
+          value={v.description}
+          onChange={(e) => set.description(e.target.value)}
+          className={`${ui.input} resize-none`}
+        />
+      </div>
+      <label className="inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={v.isToday}
+          onChange={(e) => set.isToday(e.target.checked)}
+          className="h-4 w-4 rounded border-slate-300 accent-[#02275A]"
+        />
+        Feature under "Happening today"
+      </label>
+    </>
+  )
+
+  // ---------------------------------------------------------------- Slides
+  const renderSlidesSection = () => (
+    <>
+      {renderSectionHeader(
+        "Slides",
+        "Photos and videos that rotate in the center of the TV screen.",
+        <>
+          <button
+            type="button"
+            onClick={() => engine.toggleCarouselPause(!state.isCarouselPaused)}
+            className={ui.btnSecondary}
+          >
+            {state.isCarouselPaused ? (
+              <>
+                <Play className="w-4 h-4" />
+                Resume slideshow
+              </>
+            ) : (
+              <>
+                <Pause className="w-4 h-4" />
+                Pause slideshow
+              </>
+            )}
+          </button>
+          {!showAddMedia && (
+            <button
+              type="button"
+              onClick={() => setShowAddMedia(true)}
+              className={ui.btnPrimary}
             >
-              {authenticatedUser.fullName.charAt(0) || "U"}
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs sm:text-sm font-black text-white leading-tight">
-                  {authenticatedUser.fullName}
-                </span>
-                {db.isAdmin(authenticatedUser) && (
-                  <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase tracking-wider bg-amber-400 text-slate-950 shadow-xs">
-                    Admin
-                  </span>
+              <Upload className="w-4 h-4" />
+              Upload
+            </button>
+          )}
+        </>,
+      )}
+
+      {state.isCarouselPaused &&
+        renderNotice("warn", "The slideshow is paused on all screens.")}
+      {mediaUploadSuccess &&
+        renderNotice("ok", mediaUploadSuccess, () => setMediaUploadSuccess(null))}
+
+      {showAddMedia && (
+        <form
+          onSubmit={handleMediaUploadSubmit}
+          className={`${ui.card} ${ui.cardBody} space-y-4`}
+        >
+          <div>
+            <h2 className={ui.sectionTitle}>Upload a photo or video</h2>
+            <p className={ui.hint}>JPG, PNG, WebP, GIF, MP4, WebM or MOV, up to 50 MB.</p>
+          </div>
+
+          {mediaUploadError &&
+            renderNotice("error", mediaUploadError, () => setMediaUploadError(null))}
+
+          <input
+            ref={mediaFileInputRef}
+            type="file"
+            accept="image/*,video/mp4,video/webm,video/quicktime"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) handleSelectMediaFile(file)
+              e.target.value = ""
+            }}
+            className="hidden"
+          />
+
+          {mediaPreviewUrl ? (
+            <div className="flex flex-col sm:flex-row gap-4 rounded-md border border-slate-200 bg-slate-50 p-3">
+              <div className="flex-shrink-0 overflow-hidden rounded bg-black sm:w-64">
+                {mediaType === "video" ? (
+                  <video src={mediaPreviewUrl} controls className="max-h-44 w-full" />
+                ) : (
+                  <img
+                    src={mediaPreviewUrl}
+                    alt="Upload preview"
+                    className="max-h-44 w-full object-contain"
+                  />
                 )}
               </div>
-              <span className="text-[10px] text-sky-200/90 block font-mono leading-tight">
-                {authenticatedUser.role ?? "Pending approval"} · @{authenticatedUser.username}
-              </span>
+              <div className="flex min-w-0 flex-col justify-between gap-2 text-sm">
+                <div>
+                  <p className="truncate font-medium text-slate-900">{mediaFile?.name}</p>
+                  <p className="text-slate-500">
+                    {mediaType === "video" ? "Video" : "Photo"} ·{" "}
+                    {((mediaFile?.size || 0) / (1024 * 1024)).toFixed(1)} MB
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => mediaFileInputRef.current?.click()}
+                  disabled={isUploadingMedia}
+                  className={`${ui.btnSecondary} self-start`}
+                >
+                  Choose a different file
+                </button>
+              </div>
             </div>
-          </div>
-        </div>
-
-        {/* Right Side: Action Buttons */}
-        <div className="flex items-center gap-2 sm:gap-2.5">
-          {/* Admin Portal Button - ONLY appears if user is listed as an admin */}
-          {db.isAdmin(authenticatedUser) && (
+          ) : (
             <button
-              onClick={() => setShowAdminPortal(true)}
-              className="px-3 py-1.5 sm:px-3.5 sm:py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-lg shadow-amber-500/20 transition-all cursor-pointer active:scale-95 border border-amber-300"
-              title="Open Admin Portal to create users and set specific permissions"
+              type="button"
+              onClick={() => mediaFileInputRef.current?.click()}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault()
+                const file = e.dataTransfer.files?.[0]
+                if (file) handleSelectMediaFile(file)
+              }}
+              className="flex w-full flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center hover:border-[#02275A] hover:bg-white cursor-pointer"
             >
-              <ShieldCheck className="w-4 h-4 text-slate-950" />
-              <span>Admin Portal</span>
+              <Upload className="w-6 h-6 text-slate-400" />
+              <span className="text-sm font-medium text-slate-900">
+                Choose a file or drag it here
+              </span>
             </button>
           )}
 
-          <button
-            onClick={() => setShowLivePreview(!showLivePreview)}
-            className={`px-3 py-1.5 sm:px-3.5 sm:py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-              showLivePreview
-                ? "bg-[#02275A] text-white shadow-md border border-sky-400/30"
-                : "bg-white/10 hover:bg-white/20 text-white border border-white/15"
-            }`}
-          >
-            <Eye className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">
-              {showLivePreview ? "Hide Preview" : "Show Preview"}
-            </span>
-          </button>
-
-          <button
-            onClick={onNavigateToTv}
-            className="px-3 py-1.5 sm:px-3.5 sm:py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md transition-all cursor-pointer"
-          >
-            <Tv className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">TV Screen</span>
-          </button>
-
-          <button
-            onClick={handleSignOut}
-            className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-lg bg-white/10 hover:bg-red-950/80 text-slate-300 hover:text-red-200 text-xs font-bold flex items-center gap-1.5 transition-all border border-white/15 hover:border-red-500/30 cursor-pointer"
-            title="Sign out of Staff Portal"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Sign Out</span>
-          </button>
-        </div>
-      </header>
-
-      {/* Main Body */}
-      <div className="flex-1 min-h-0 flex overflow-hidden">
-        {/* Left Side: Controller Forms */}
-        <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 space-y-6">
-
-          {/* Lab hours & live room status */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            {([126, 127] as const).map((id) => {
-              const lab = state.labs[id]
-              if (!lab) return null
-
-              const title =
-                id === 126
-                  ? "Lab 126 · Computer Lab"
-                  : "Lab 127 · Senior Design & Tutoring"
-              const dot = id === 126 ? "bg-[#02275A]" : "bg-purple-500"
-              const statuses: LabStatus[] = ["Open", "Closed", "Reserved"]
-              const activeColor = (st: LabStatus) =>
-                st === "Open"
-                  ? "bg-emerald-600"
-                  : st === "Closed"
-                    ? "bg-red-600"
-                    : "bg-amber-600"
-
-              return (
-                <div
-                  key={id}
-                  className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-5"
-                >
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                    <div className="flex items-center gap-2">
-                      <span className={`w-2.5 h-2.5 rounded-full ${dot}`} />
-                      <h3 className="font-extrabold text-sm text-white uppercase tracking-wider">
-                        {title}
-                      </h3>
-                    </div>
-                    <span className="text-xs font-bold px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-sky-300">
-                      Live on Board: {getEffectiveLabStatus(lab)}
-                      {getEffectiveLabStatus(lab) !== lab.status && ` (Manual: ${lab.status})`}
-                    </span>
-                  </div>
-
-                  {/* Room status */}
-                  <div>
-                    <label className="text-[11px] text-slate-400 uppercase font-bold block mb-2">
-                      Room Status (updates TV instantly)
-                    </label>
-                    <div className="grid grid-cols-3 gap-2">
-                      {statuses.map((st) => (
-                        <button
-                          key={st}
-                          onClick={() => engine.updateLab(id, { status: st })}
-                          className={`py-2 px-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                            lab.status === st
-                              ? `${activeColor(st)} text-white shadow-lg`
-                              : "bg-slate-800 hover:bg-slate-700 text-slate-300"
-                          }`}
-                        >
-                          {st}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Hours */}
-                  <div className="pt-4 border-t border-slate-800/80 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <label className="text-[11px] text-slate-400 uppercase font-bold block">
-                        Lab Hours (15-min intervals)
-                      </label>
-                      <span className="text-[10px] text-slate-400 font-mono">
-                        Syncs live to TV board
-                      </span>
-                    </div>
-                    <LabHoursIntervalPicker
-                      label="Mon – Thu"
-                      value={lab.hours.monThu}
-                      onCommit={(v) =>
-                        engine.updateLab(id, {
-                          hours: { ...lab.hours, monThu: v },
-                        })
-                      }
-                    />
-                    <LabHoursIntervalPicker
-                      label="Fri"
-                      value={lab.hours.fri}
-                      onCommit={(v) =>
-                        engine.updateLab(id, {
-                          hours: { ...lab.hours, fri: v },
-                        })
-                      }
-                    />
-                    <LabHoursIntervalPicker
-                      label="Weekend"
-                      value={lab.hours.weekend || "Closed"}
-                      onCommit={(v) =>
-                        engine.updateLab(id, {
-                          hours: { ...lab.hours, weekend: v },
-                        })
-                      }
-                    />
-
-                    {id === 127 && (
-                      <div className="pt-3 border-t border-slate-800/80 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <label className="text-[11px] text-purple-300 uppercase font-bold flex items-center gap-1.5">
-                            <GraduationCap className="w-3.5 h-3.5" />
-                            <span>Active Tutors & Schedules</span>
-                          </label>
-                          <button
-                            type="button"
-                            onClick={handleStartAddTutor}
-                            className="text-[10px] font-bold text-sky-400 hover:text-sky-300 bg-sky-500/10 hover:bg-sky-500/20 px-2.5 py-1 rounded-lg border border-sky-500/30 flex items-center gap-1 transition cursor-pointer"
-                          >
-                            <Plus className="w-3 h-3" />
-                            <span>Add Tutor</span>
-                          </button>
-                        </div>
-
-                        {/* Add Tutor & Pick Times by Days Form */}
-                        {showAddTutor && (
-                          <form
-                            onSubmit={handleSaveTutorSchedule}
-                            className="p-3.5 bg-slate-900/95 rounded-xl border border-sky-500/40 space-y-3 animate-in fade-in duration-200"
-                          >
-                            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-                              <div className="flex items-center gap-1.5">
-                                <User className="w-4 h-4 text-sky-400" />
-                                <span className="text-xs font-bold text-sky-300">
-                                  {editingTutorOriginalName
-                                    ? `Edit Schedule: ${editingTutorOriginalName}`
-                                    : "Add Tutor & Weekly Hours"}
-                                </span>
-                              </div>
-                              <span className="text-[9px] text-slate-400">
-                                Pick times by day
-                              </span>
-                            </div>
-
-                            {/* Tutor Info: Name & Default Course */}
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                              <div>
-                                <label className="text-[10px] text-slate-400 font-bold block mb-1">
-                                  Tutor Name *
-                                </label>
-                                <input
-                                  type="text"
-                                  required
-                                  value={tutorName}
-                                  onChange={(e) => setTutorName(e.target.value)}
-                                  placeholder="e.g. Cole, James, Erick, Aniya"
-                                  className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none focus:border-[#02275A]"
-                                />
-                              </div>
-
-                              <div>
-                                <label className="text-[10px] text-slate-400 font-bold block mb-1">
-                                  Default Course
-                                </label>
-                                <select
-                                  value={tutorCourse}
-                                  onChange={(e) => {
-                                    const c = e.target.value
-                                    setTutorCourse(c)
-                                    // Update days that still match old default
-                                    setTutorDays((prev) => {
-                                      const updated = { ...prev }
-                                      ;([
-                                        "Mon",
-                                        "Tue",
-                                        "Wed",
-                                        "Thu",
-                                        "Fri",
-                                      ] as WeekDay[]).forEach((d) => {
-                                        if (
-                                          updated[d].enabled &&
-                                          (!updated[d].course ||
-                                            updated[d].course === tutorCourse)
-                                        ) {
-                                          updated[d] = {
-                                            ...updated[d],
-                                            course: c,
-                                          }
-                                        }
-                                      })
-                                      return updated
-                                    })
-                                  }}
-                                  className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none focus:border-[#02275A]"
-                                >
-                                  <option value="151 & 152">
-                                    151 & 152
-                                  </option>
-                                  <option value="251">
-                                    251
-                                  </option>
-                                </select>
-                              </div>
-                            </div>
-
-                            {/* Times by Days (M–F) */}
-                            <div className="space-y-2 pt-1">
-                              <label className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">
-                                Pick Times by Day (Mon – Fri)
-                              </label>
-
-                              {([
-                                "Mon",
-                                "Tue",
-                                "Wed",
-                                "Thu",
-                                "Fri",
-                              ] as WeekDay[]).map((day) => {
-                                const entry = tutorDays[day]
-                                const dayNames: Record<WeekDay, string> = {
-                                  Mon: "Monday",
-                                  Tue: "Tuesday",
-                                  Wed: "Wednesday",
-                                  Thu: "Thursday",
-                                  Fri: "Friday",
-                                }
-
-                                return (
-                                  <div
-                                    key={day}
-                                    className={`p-2 rounded-lg border transition-all ${
-                                      entry.enabled
-                                        ? "bg-slate-800/90 border-sky-500/50"
-                                        : "bg-slate-900/50 border-slate-800 opacity-70"
-                                    }`}
-                                  >
-                                    <div className="flex items-center justify-between mb-1.5">
-                                      <label className="flex items-center gap-2 cursor-pointer select-none">
-                                        <input
-                                          type="checkbox"
-                                          checked={entry.enabled}
-                                          onChange={(e) => {
-                                            const isChecked = e.target.checked
-                                            setTutorDays((prev) => ({
-                                              ...prev,
-                                              [day]: {
-                                                ...prev[day],
-                                                enabled: isChecked,
-                                                time:
-                                                  isChecked && !prev[day].time
-                                                    ? "2:00 PM – 4:00 PM"
-                                                    : prev[day].time,
-                                                course:
-                                                  prev[day].course ||
-                                                  tutorCourse,
-                                              },
-                                            }))
-                                          }}
-                                          className="rounded border-slate-700 text-[#02275A] focus:ring-0 cursor-pointer"
-                                        />
-                                        <span
-                                          className={`text-xs font-bold ${
-                                            entry.enabled
-                                              ? "text-white"
-                                              : "text-slate-400"
-                                          }`}
-                                        >
-                                          {dayNames[day]} ({day})
-                                        </span>
-                                      </label>
-
-                                      {entry.enabled ? (
-                                        <select
-                                          value={entry.course}
-                                          onChange={(e) => {
-                                            const newCourse = e.target.value
-                                            setTutorDays((prev) => ({
-                                              ...prev,
-                                              [day]: {
-                                                ...prev[day],
-                                                course: newCourse,
-                                              },
-                                            }))
-                                          }}
-                                          className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-[10px] text-sky-300 font-bold focus:outline-none"
-                                        >
-                                          <option value="151 & 152">
-                                            151 & 152
-                                          </option>
-                                          <option value="251">
-                                            251
-                                          </option>
-                                        </select>
-                                      ) : (
-                                        <span className="text-[10px] text-slate-500 italic">
-                                          Off
-                                        </span>
-                                      )}
-                                    </div>
-
-                                    {entry.enabled && (
-                                      <div className="space-y-1.5 mt-1 pl-6">
-                                        <input
-                                          type="text"
-                                          value={entry.time}
-                                          onChange={(e) => {
-                                            const val = e.target.value
-                                            setTutorDays((prev) => ({
-                                              ...prev,
-                                              [day]: {
-                                                ...prev[day],
-                                                time: val,
-                                              },
-                                            }))
-                                          }}
-                                          placeholder="e.g. 11:50 AM – 1:00 PM or 1-2 then 3-6"
-                                          className="w-full px-2.5 py-1 rounded bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-[#02275A] font-mono"
-                                        />
-
-                                        {/* Quick time preset chips */}
-                                        <div className="flex flex-wrap gap-1">
-                                          {[
-                                            "11:50 AM – 1:00 PM",
-                                            "1:00 PM – 2:00 PM & 3:00 PM – 6:00 PM",
-                                            "2:00 PM – 4:00 PM",
-                                            "3:30 PM – 5:00 PM",
-                                            "5:00 PM – 6:00 PM",
-                                          ].map((preset) => (
-                                            <button
-                                              key={preset}
-                                              type="button"
-                                              onClick={() => {
-                                                setTutorDays((prev) => ({
-                                                  ...prev,
-                                                  [day]: {
-                                                    ...prev[day],
-                                                    time: preset,
-                                                  },
-                                                }))
-                                              }}
-                                              className="text-[9px] px-1.5 py-0.5 rounded bg-slate-700/60 hover:bg-slate-700 text-slate-300 font-mono transition cursor-pointer"
-                                            >
-                                              {preset.length > 20
-                                                ? preset.slice(0, 18) + "..."
-                                                : preset}
-                                            </button>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    )}
-                                  </div>
-                                )
-                              })}
-                            </div>
-
-                            <div className="flex items-center gap-2 pt-2">
-                              <button
-                                type="submit"
-                                className="flex-1 py-1.5 rounded-lg bg-[#02275A] hover:bg-blue-600 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow transition cursor-pointer"
-                              >
-                                <CheckCircle2 className="w-3.5 h-3.5" />
-                                <span>Save Tutor Schedule</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setShowAddTutor(false)
-                                  setEditingTutorOriginalName(null)
-                                }}
-                                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition cursor-pointer"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          </form>
-                        )}
-
-                        {/* Active Tutors List: Grouped by Tutor with all their days */}
-                        <div className="space-y-2">
-                          {(() => {
-                            const shifts = lab.tutorShifts || []
-                            if (shifts.length === 0) {
-                              return (
-                                <p className="text-[11px] text-slate-500 italic p-3 bg-slate-800/40 rounded-lg text-center">
-                                  No tutors added yet. Click &quot;Add
-                                  Tutor&quot; above to set up peer tutors and
-                                  their days.
-                                </p>
-                              )
-                            }
-
-                            // Group shifts by tutor
-                            const tutorMap: Record<string, TutorShift[]> = {}
-                            shifts.forEach((s) => {
-                              if (!tutorMap[s.tutorName]) {
-                                tutorMap[s.tutorName] = []
-                              }
-                              tutorMap[s.tutorName].push(s)
-                            })
-
-                            return Object.entries(tutorMap).map(
-                              ([tutor, tShifts]) => {
-                                const courses = Array.from(
-                                  new Set(tShifts.map((s) => s.course)),
-                                )
-                                return (
-                                  <div
-                                    key={tutor}
-                                    className="p-2.5 rounded-xl bg-slate-800/80 border border-slate-700/70 space-y-2"
-                                  >
-                                    {/* Tutor Header with Edit & Delete */}
-                                    <div className="flex items-center justify-between gap-2">
-                                      <div className="flex items-center gap-2 min-w-0">
-                                        <div className="w-6 h-6 rounded-full bg-[#02275A]/30 text-sky-300 flex items-center justify-center font-bold text-xs border border-sky-400/40 flex-shrink-0">
-                                          {tutor.charAt(0).toUpperCase()}
-                                        </div>
-                                        <div className="min-w-0">
-                                          <span className="font-extrabold text-white text-xs block truncate">
-                                            {tutor}
-                                          </span>
-                                          <div className="flex flex-wrap gap-1">
-                                            {courses.map((c) => (
-                                              <span
-                                                key={c}
-                                                className="text-[8px] font-bold px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30"
-                                              >
-                                                {c.toLowerCase().includes("intro") ||
-                                                c.includes("151") ||
-                                                c.includes("152")
-                                                  ? "151 & 152"
-                                                  : "251"}
-                                              </span>
-                                            ))}
-                                          </div>
-                                        </div>
-                                      </div>
-
-                                      <div className="flex items-center gap-1 flex-shrink-0">
-                                        <button
-                                          type="button"
-                                          onClick={() =>
-                                            handleStartEditTutor(tutor, tShifts)
-                                          }
-                                          title="Edit Tutor Times"
-                                          className="p-1.5 rounded-lg text-slate-300 hover:text-white bg-slate-700/60 hover:bg-slate-700 transition cursor-pointer flex items-center gap-1 text-[10px] font-bold"
-                                        >
-                                          <Pencil className="w-3 h-3" />
-                                          <span className="hidden sm:inline">
-                                            Edit
-                                          </span>
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() =>
-                                            handleDeleteTutor(tutor)
-                                          }
-                                          title="Delete Tutor"
-                                          className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition cursor-pointer"
-                                        >
-                                          <Trash2 className="w-3.5 h-3.5" />
-                                        </button>
-                                      </div>
-                                    </div>
-
-                                    {/* Days & Times for this tutor */}
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1 border-t border-slate-700/50">
-                                      {tShifts.map((s) => (
-                                        <div
-                                          key={s.id}
-                                          className="flex items-center justify-between px-2 py-1 rounded bg-slate-900/60 border border-slate-800 text-[10px]"
-                                        >
-                                          <span className="font-bold text-sky-300 bg-sky-500/20 px-1 rounded border border-sky-500/30 font-mono">
-                                            {s.day}
-                                          </span>
-                                          <span className="text-white/90 font-mono text-[9.5px] truncate ml-1.5">
-                                            {s.time}
-                                          </span>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )
-                              },
-                            )
-                          })()}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Class Schedule for this lab */}
-                    <LabClassScheduleManager lab={lab} engine={engine} />
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-
-          {/* 3. Urgent Alert Broadcast Form */}
-          <div className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="w-5 h-5 text-amber-400" />
-                <h3 className="font-extrabold text-sm sm:text-base text-white uppercase tracking-wider">
-                  Urgent Campus Broadcast Banner (Overlays on TV)
-                </h3>
-              </div>
-              {state.urgentAlert?.active && (
-                <span className="text-xs bg-red-600 font-black px-2.5 py-0.5 rounded uppercase tracking-wider">
-                  Currently Active on TV
-                </span>
-              )}
-            </div>
-
-            <form onSubmit={handleBroadcastAlert} className="space-y-3">
-              <textarea
-                rows={2}
-                value={alertText}
-                onChange={(e) => setAlertText(e.target.value)}
-                placeholder="Type urgent announcement or notice to display on the TV..."
-                className="w-full px-4 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-xs sm:text-sm text-white focus:outline-none focus:border-[#02275A] resize-none"
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className={ui.label} htmlFor="media-title">
+                Title
+              </label>
+              <input
+                id="media-title"
+                type="text"
+                required
+                placeholder="ACM Hackathon, Fall 2026"
+                value={mediaTitle}
+                onChange={(e) => setMediaTitle(e.target.value)}
+                className={ui.input}
               />
-
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-400 font-bold uppercase">
-                    Level:
-                  </span>
-                  {(["info", "warning", "emergency"] as const).map((level) => (
-                    <button
-                      key={level}
-                      type="button"
-                      onClick={() => setAlertLevel(level)}
-                      className={`px-3 py-1 rounded-lg text-xs font-bold uppercase transition-all cursor-pointer ${
-                        alertLevel === level
-                          ? level === "emergency"
-                            ? "bg-red-600 text-white"
-                            : level === "warning"
-                              ? "bg-amber-600 text-white"
-                              : "bg-[#02275A] text-white"
-                          : "bg-slate-800 text-slate-400 hover:text-white"
-                      }`}
-                    >
-                      {level}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {state.urgentAlert?.active && (
-                    <button
-                      type="button"
-                      onClick={handleDismissAlert}
-                      className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
-                    >
-                      Dismiss from TV
-                    </button>
-                  )}
-                  <button
-                    type="submit"
-                    className="px-5 py-2 rounded-xl bg-[#02275A] hover:bg-[#02275A]/80 text-white text-xs font-bold flex items-center gap-2 shadow-lg transition-all cursor-pointer active:scale-95"
-                  >
-                    <Send className="w-3.5 h-3.5" />
-                    <span>Broadcast to TV Now</span>
-                  </button>
-                </div>
-              </div>
-            </form>
+            </div>
+            <div>
+              <label className={ui.label} htmlFor="media-subtitle">
+                Subtitle
+              </label>
+              <input
+                id="media-subtitle"
+                type="text"
+                placeholder="Saturday, Oct 17 · Room 112"
+                value={mediaSubtitle}
+                onChange={(e) => setMediaSubtitle(e.target.value)}
+                className={ui.input}
+              />
+            </div>
+            <div>
+              <label className={ui.label} htmlFor="media-category">
+                Category
+              </label>
+              <select
+                id="media-category"
+                value={mediaCategory}
+                onChange={(e) => setMediaCategory(e.target.value)}
+                className={`${ui.select} w-full`}
+              >
+                {SLIDE_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={ui.label} htmlFor="media-duration">
+                Seconds on screen
+              </label>
+              <input
+                id="media-duration"
+                type="number"
+                min={3}
+                max={120}
+                value={mediaDuration}
+                onChange={(e) => setMediaDuration(Number(e.target.value))}
+                className={`${ui.input} max-w-[8rem]`}
+              />
+              <p className={`${ui.hint} mt-1`}>About 8 for photos, 15 for videos.</p>
+            </div>
           </div>
 
-          {/* 4. Center Screen Slideshow Media Manager (Photos & Videos) */}
-          <div className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">
-              <div className="flex items-center gap-2">
-                <Layers className="w-5 h-5 text-sky-400" />
-                <h3 className="font-extrabold text-sm sm:text-base text-white uppercase tracking-wider">
-                  TV Slideshow Media Manager ({(state.slides || []).length}{" "}
-                  Items)
-                </h3>
+          <div>
+            <label className={ui.label} htmlFor="media-caption">
+              Caption <span className="font-normal text-slate-500">(optional)</span>
+            </label>
+            <textarea
+              id="media-caption"
+              rows={2}
+              placeholder="Shown along the bottom of the slide"
+              value={mediaCaption}
+              onChange={(e) => setMediaCaption(e.target.value)}
+              className={`${ui.input} resize-none`}
+            />
+          </div>
+
+          {isUploadingMedia && mediaUploadProgress !== null && (
+            <div className="space-y-1">
+              <div className="h-1.5 w-full overflow-hidden rounded bg-slate-200">
+                <div
+                  className="h-full bg-[#02275A] transition-all"
+                  style={{ width: `${mediaUploadProgress}%` }}
+                />
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAddMedia(!showAddMedia)}
-                  className="py-1.5 px-3 rounded-xl bg-[#02275A] hover:bg-[#02275A]/80 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-md active:scale-95"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>
-                    {showAddMedia ? "Close Uploader" : "Upload Photo or Video"}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    engine.toggleCarouselPause(!state.isCarouselPaused)
-                  }
-                  className={`py-1.5 px-3 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all ${
-                    state.isCarouselPaused
-                      ? "bg-emerald-600 hover:bg-emerald-500 text-white"
-                      : "bg-amber-600 hover:bg-amber-500 text-white"
-                  }`}
-                >
-                  {state.isCarouselPaused ? (
-                    <>
-                      <Play className="w-3 h-3 fill-current" />
-                      <span>Resume TV</span>
-                    </>
-                  ) : (
-                    <>
-                      <Pause className="w-3 h-3 fill-current" />
-                      <span>Pause TV</span>
-                    </>
-                  )}
-                </button>
-              </div>
+              <p className={ui.hint}>
+                {mediaUploadProgress < 100
+                  ? `Uploading… ${mediaUploadProgress}%`
+                  : "Adding to slideshow…"}
+              </p>
             </div>
+          )}
 
-            {/* Success banner */}
-            {mediaUploadSuccess && (
-              <div className="p-3 rounded-xl bg-emerald-950/60 border border-emerald-600 text-emerald-200 text-xs flex items-center justify-between">
-                <span>✓ {mediaUploadSuccess}</span>
-                <button
-                  type="button"
-                  onClick={() => setMediaUploadSuccess(null)}
-                  className="text-white/60 hover:text-white"
-                >
-                  Dismiss
-                </button>
-              </div>
-            )}
+          <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
+            <button
+              type="button"
+              onClick={() => {
+                setShowAddMedia(false)
+                setMediaFile(null)
+                setMediaPreviewUrl(null)
+                setMediaUploadError(null)
+              }}
+              disabled={isUploadingMedia}
+              className={ui.btnSecondary}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={!mediaFile || !mediaTitle.trim() || isUploadingMedia}
+              className={ui.btnPrimary}
+            >
+              {isUploadingMedia ? "Uploading…" : "Add to slideshow"}
+            </button>
+          </div>
+        </form>
+      )}
 
-            {/* Upload Photo / Video Form */}
-            {showAddMedia && (
-              <form
-                onSubmit={handleMediaUploadSubmit}
-                className="p-4 sm:p-5 rounded-xl bg-slate-800/90 border border-slate-700 space-y-4 shadow-inner"
-              >
-                <div className="flex items-center justify-between border-b border-slate-700/80 pb-2">
-                  <span className="text-xs font-bold uppercase tracking-wider text-sky-300 flex items-center gap-1.5">
-                    <Upload className="w-3.5 h-3.5" />
-                    Upload New Media Slide (Photos & Videos)
+      {slides.length === 0 ? (
+        <div className={ui.empty}>
+          No slides yet. Upload a photo or video to start the slideshow.
+        </div>
+      ) : (
+        <ul className={`${ui.card} divide-y divide-slate-100`}>
+          {slides.map((slide, idx) => {
+            const isCurrent = state.activeSlideIndex === idx
+            const isVid =
+              slide.mediaType === "video" ||
+              Boolean(
+                slide.url &&
+                  (slide.url.match(/\.(mp4|webm|mov|ogg)$/i) ||
+                    slide.url.startsWith("data:video/")),
+              )
+
+            return (
+              <li key={slide.id}>
+                <div className="flex items-center gap-3 px-3 py-3 sm:px-4">
+                  <span className="w-5 flex-shrink-0 text-right text-sm text-slate-400">
+                    {idx + 1}
                   </span>
-                  <span className="text-[11px] text-slate-400">
-                    Supports JPG, PNG, WEBP, GIF, MP4, WebM, MOV · max 50 MB
-                  </span>
-                </div>
-
-                {mediaUploadError && (
-                  <div className="p-3 rounded-xl bg-red-950/70 border border-red-500/40 text-red-200 text-xs flex items-center justify-between gap-2">
-                    <span className="flex items-center gap-2">
-                      <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />
-                      <span>{mediaUploadError}</span>
-                    </span>
+                  <div className="relative h-12 w-20 flex-shrink-0 overflow-hidden rounded bg-slate-900">
+                    {isVid ? (
+                      <>
+                        <video
+                          src={slide.url}
+                          className="h-full w-full object-cover"
+                          muted
+                          preload="metadata"
+                        />
+                        <span className="absolute inset-0 flex items-center justify-center bg-black/30">
+                          <Video className="w-4 h-4 text-white" />
+                        </span>
+                      </>
+                    ) : (
+                      <img
+                        src={slide.url}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-sm font-medium text-slate-900">
+                        {slide.title}
+                      </span>
+                      {isCurrent && (
+                        <span className={`${ui.badge} bg-emerald-100 text-emerald-800`}>
+                          On screen
+                        </span>
+                      )}
+                    </div>
+                    <p className="flex items-center gap-1.5 truncate text-sm text-slate-500">
+                      {isVid ? (
+                        <Video className="w-3.5 h-3.5 flex-shrink-0" />
+                      ) : (
+                        <ImageIcon className="w-3.5 h-3.5 flex-shrink-0" />
+                      )}
+                      {slide.durationSeconds || (isVid ? 12 : 6)}s · {slide.category}
+                    </p>
+                  </div>
+                  <div className="flex flex-shrink-0 items-center gap-0.5">
                     <button
                       type="button"
-                      onClick={() => setMediaUploadError(null)}
-                      className="text-white/60 hover:text-white"
+                      onClick={() => engine.setActiveSlide(idx, true)}
+                      disabled={isCurrent}
+                      title="Show this slide on every screen now"
+                      className="hidden sm:inline-flex mr-1 rounded-md px-2.5 py-1.5 text-sm font-medium text-[#02275A] hover:bg-slate-100 disabled:text-slate-400 disabled:hover:bg-transparent cursor-pointer disabled:cursor-default"
                     >
-                      Dismiss
+                      Show now
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPreviewSlideId(slide.id)
+                        setSection("preview")
+                      }}
+                      className={ui.iconBtn}
+                      title="Adjust framing on the TV"
+                      aria-label="Adjust framing"
+                    >
+                      <Crop className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={idx === 0}
+                      onClick={() => handleMoveSlide(idx, "up")}
+                      className={ui.iconBtn}
+                      title="Move up"
+                      aria-label="Move up"
+                    >
+                      <ArrowUp className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={idx === slides.length - 1}
+                      onClick={() => handleMoveSlide(idx, "down")}
+                      className={ui.iconBtn}
+                      title="Move down"
+                      aria-label="Move down"
+                    >
+                      <ArrowDown className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        editingSlideId === slide.id
+                          ? setEditingSlideId(null)
+                          : handleStartEditSlide(slide)
+                      }
+                      className={ui.iconBtn}
+                      title="Edit"
+                      aria-label="Edit slide"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteSlide(slide.id)}
+                      className={ui.iconBtnDanger}
+                      title="Delete"
+                      aria-label="Delete slide"
+                    >
+                      <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
-                )}
+                </div>
 
-                {/* Dropzone / File Picker */}
-                <div>
-                  <input
-                    ref={mediaFileInputRef}
-                    type="file"
-                    accept="image/*,video/mp4,video/webm,video/quicktime"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0]
-                      if (file) handleSelectMediaFile(file)
-                      e.target.value = ""
-                    }}
-                    className="hidden"
-                  />
-
-                  {mediaPreviewUrl ? (
-                    <div className="relative rounded-xl overflow-hidden bg-black/60 border border-slate-700 p-3 flex flex-col items-center gap-3">
-                      {mediaType === "video" ? (
-                        <video
-                          src={mediaPreviewUrl}
-                          controls
-                          className="max-h-56 max-w-full rounded-lg bg-black"
+                {editingSlideId === slide.id && (
+                  <form
+                    onSubmit={handleSaveEditSlide}
+                    className="space-y-3 border-t border-slate-100 bg-slate-50 px-4 py-4"
+                  >
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className={ui.label} htmlFor={`slide-title-${slide.id}`}>
+                          Title
+                        </label>
+                        <input
+                          id={`slide-title-${slide.id}`}
+                          type="text"
+                          required
+                          value={editSlideTitle}
+                          onChange={(e) => setEditSlideTitle(e.target.value)}
+                          className={ui.input}
                         />
-                      ) : (
-                        <img
-                          src={mediaPreviewUrl}
-                          alt="Upload preview"
-                          className="max-h-56 max-w-full rounded-lg object-contain bg-black"
-                        />
-                      )}
-
-                      <div className="flex items-center justify-between w-full text-xs text-slate-300 px-2">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`px-2 py-0.5 rounded font-black text-[10px] uppercase ${
-                              mediaType === "video"
-                                ? "bg-red-600 text-white"
-                                : "bg-sky-600 text-white"
-                            }`}
-                          >
-                            {mediaType}
-                          </span>
-                          <span className="truncate max-w-xs">
-                            {mediaFile?.name}
-                          </span>
-                          <span className="text-slate-400 font-mono text-[11px]">
-                            (
-                            {((mediaFile?.size || 0) / (1024 * 1024)).toFixed(
-                              2,
-                            )}{" "}
-                            MB)
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => mediaFileInputRef.current?.click()}
-                          className="px-2.5 py-1 rounded bg-slate-700 hover:bg-slate-600 text-white text-[11px] font-semibold cursor-pointer"
-                        >
-                          Change File
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div
-                      onClick={() => mediaFileInputRef.current?.click()}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={(e) => {
-                        e.preventDefault()
-                        const file = e.dataTransfer.files?.[0]
-                        if (file) handleSelectMediaFile(file)
-                      }}
-                      className="border-2 border-dashed border-slate-600 hover:border-[#02275A] bg-slate-900/60 hover:bg-slate-900/90 rounded-xl p-8 text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-3"
-                    >
-                      <div className="p-3 rounded-full bg-[#02275A]/20 text-sky-400">
-                        <Upload className="w-6 h-6" />
                       </div>
                       <div>
-                        <p className="text-sm font-bold text-white">
-                          Click to select photo or video, or drag and drop here
-                        </p>
-                        <p className="text-xs text-slate-400 mt-1">
-                          Photos (PNG, JPG, WEBP) or Videos (MP4, WebM, MOV)
-                        </p>
+                        <label className={ui.label} htmlFor={`slide-subtitle-${slide.id}`}>
+                          Subtitle
+                        </label>
+                        <input
+                          id={`slide-subtitle-${slide.id}`}
+                          type="text"
+                          value={editSlideSubtitle}
+                          onChange={(e) => setEditSlideSubtitle(e.target.value)}
+                          className={ui.input}
+                        />
+                      </div>
+                      <div>
+                        <label className={ui.label} htmlFor={`slide-category-${slide.id}`}>
+                          Category
+                        </label>
+                        <input
+                          id={`slide-category-${slide.id}`}
+                          type="text"
+                          list="slide-category-options"
+                          value={editSlideCategory}
+                          onChange={(e) => setEditSlideCategory(e.target.value)}
+                          className={ui.input}
+                        />
+                      </div>
+                      <div>
+                        <label className={ui.label} htmlFor={`slide-duration-${slide.id}`}>
+                          Seconds on screen
+                        </label>
+                        <input
+                          id={`slide-duration-${slide.id}`}
+                          type="number"
+                          min={3}
+                          max={120}
+                          value={editSlideDuration}
+                          onChange={(e) => setEditSlideDuration(Number(e.target.value))}
+                          className={`${ui.input} max-w-[8rem]`}
+                        />
                       </div>
                     </div>
+                    <div>
+                      <label className={ui.label} htmlFor={`slide-caption-${slide.id}`}>
+                        Caption
+                      </label>
+                      <textarea
+                        id={`slide-caption-${slide.id}`}
+                        rows={2}
+                        value={editSlideCaption}
+                        onChange={(e) => setEditSlideCaption(e.target.value)}
+                        className={`${ui.input} resize-none`}
+                      />
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditingSlideId(null)}
+                        className={ui.btnSecondary}
+                      >
+                        Cancel
+                      </button>
+                      <button type="submit" className={ui.btnPrimary}>
+                        Save changes
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      <datalist id="slide-category-options">
+        {SLIDE_CATEGORIES.map((c) => (
+          <option key={c} value={c} />
+        ))}
+      </datalist>
+    </>
+  )
+
+  // ---------------------------------------------------------------- Events
+  const renderEventsSection = () => (
+    <>
+      {renderSectionHeader(
+        "Events",
+        "Announcements listed on the left side of the TV screen.",
+        <>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".ics,text/calendar"
+            onChange={handleIcsFile}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className={ui.btnSecondary}
+            title="Import events from a calendar (.ics) file"
+          >
+            <Upload className="w-4 h-4" />
+            Import calendar
+          </button>
+          {!showAddEvent && (
+            <button
+              type="button"
+              onClick={() => setShowAddEvent(true)}
+              className={ui.btnPrimary}
+            >
+              <Plus className="w-4 h-4" />
+              Add event
+            </button>
+          )}
+        </>,
+      )}
+
+      {importMsg &&
+        renderNotice(importMsg.type === "ok" ? "ok" : "error", importMsg.text, () =>
+          setImportMsg(null),
+        )}
+
+      {showAddEvent && (
+        <form
+          onSubmit={handleAddEventSubmit}
+          className={`${ui.card} ${ui.cardBody} space-y-3`}
+        >
+          <h2 className={ui.sectionTitle}>New event</h2>
+          {renderEventFields(
+            "new-event",
+            {
+              title: eventTitle,
+              date: eventDate,
+              time: eventTime,
+              location: eventLocation,
+              category: eventCategory,
+              description: eventDescription,
+              isToday: eventIsToday,
+            },
+            {
+              title: setEventTitle,
+              date: setEventDate,
+              time: setEventTime,
+              location: setEventLocation,
+              category: setEventCategory,
+              description: setEventDescription,
+              isToday: setEventIsToday,
+            },
+          )}
+          <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
+            <button
+              type="button"
+              onClick={() => setShowAddEvent(false)}
+              className={ui.btnSecondary}
+            >
+              Cancel
+            </button>
+            <button type="submit" className={ui.btnPrimary}>
+              Add event
+            </button>
+          </div>
+        </form>
+      )}
+
+      {state.events.length === 0 ? (
+        <div className={ui.empty}>
+          No events yet. Add one, or import a calendar (.ics) file.
+        </div>
+      ) : (
+        <ul className={`${ui.card} divide-y divide-slate-100`}>
+          {state.events.map((ev) =>
+            editingEventId === ev.id ? (
+              <li key={ev.id}>
+                <form
+                  onSubmit={handleSaveEditEvent}
+                  className="space-y-3 bg-slate-50 px-4 py-4"
+                >
+                  {renderEventFields(
+                    `edit-${ev.id}`,
+                    {
+                      title: editEventTitle,
+                      date: editEventDate,
+                      time: editEventTime,
+                      location: editEventLocation,
+                      category: editEventCategory,
+                      description: editEventDescription,
+                      isToday: editEventIsToday,
+                    },
+                    {
+                      title: setEditEventTitle,
+                      date: setEditEventDate,
+                      time: setEditEventTime,
+                      location: setEditEventLocation,
+                      category: setEditEventCategory,
+                      description: setEditEventDescription,
+                      isToday: setEditEventIsToday,
+                    },
+                  )}
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditingEventId(null)}
+                      className={ui.btnSecondary}
+                    >
+                      Cancel
+                    </button>
+                    <button type="submit" className={ui.btnPrimary}>
+                      Save changes
+                    </button>
+                  </div>
+                </form>
+              </li>
+            ) : (
+              <li key={ev.id} className="flex items-start gap-3 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium text-slate-900">{ev.title}</span>
+                    <span className={`${ui.badge} bg-slate-100 text-slate-700`}>
+                      {ev.category}
+                    </span>
+                    {ev.isToday && (
+                      <span className={`${ui.badge} bg-amber-100 text-amber-800`}>
+                        Today
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm text-slate-500">
+                    {[ev.date, ev.time, ev.location].filter(Boolean).join(" · ")}
+                  </p>
+                  {ev.description && (
+                    <p className="mt-0.5 line-clamp-2 text-sm text-slate-500">
+                      {ev.description}
+                    </p>
                   )}
                 </div>
-
-                {/* Form fields */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-[11px] text-slate-400 uppercase font-bold block mb-1">
-                      Slide Title *
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. ACM Hackathon Fall 2026"
-                      value={mediaTitle}
-                      onChange={(e) => setMediaTitle(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-[#02275A]"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] text-slate-400 uppercase font-bold block mb-1">
-                      Subtitle / Location / Date
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Saturday, Oct 17 · ST112"
-                      value={mediaSubtitle}
-                      onChange={(e) => setMediaSubtitle(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-[#02275A]"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] text-slate-400 uppercase font-bold block mb-1">
-                      Category
-                    </label>
-                    <select
-                      value={mediaCategory}
-                      onChange={(e) => setMediaCategory(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-[#02275A]"
-                    >
-                      <option value="Campus Announcement">
-                        Campus Announcement
-                      </option>
-                      <option value="Club Announcement">
-                        Club Announcement
-                      </option>
-                      <option value="Department Spotlight">
-                        Department Spotlight
-                      </option>
-                      <option value="Industry Partner">Industry Partner</option>
-                      <option value="Campus Facilities">
-                        Campus Facilities
-                      </option>
-                      <option value="Student Showcase">Student Showcase</option>
-                      <option value="Career & Research">
-                        Career & Research
-                      </option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] text-slate-400 uppercase font-bold block mb-1">
-                      Display Duration on TV Screen
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        min={3}
-                        max={120}
-                        value={mediaDuration}
-                        onChange={(e) =>
-                          setMediaDuration(Number(e.target.value))
-                        }
-                        className="w-24 px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none font-mono"
-                      />
-                      <span className="text-xs text-slate-400">
-                        seconds (recommended: 6-8s for photos, 12-20s for
-                        videos)
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-[11px] text-slate-400 uppercase font-bold block mb-1">
-                    Description / Caption (Shown on TV banner)
-                  </label>
-                  <textarea
-                    rows={2}
-                    placeholder="Brief caption or instructions for students..."
-                    value={mediaCaption}
-                    onChange={(e) => setMediaCaption(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-[#02275A] resize-none"
-                  />
-                </div>
-
-                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-700">
+                <div className="flex flex-shrink-0 items-center gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => engine.updateEvent(ev.id, { isToday: !ev.isToday })}
+                    className="hidden sm:inline-flex mr-1 rounded-md px-2.5 py-1.5 text-sm font-medium text-[#02275A] hover:bg-slate-100 cursor-pointer"
+                    title='Show or hide this event under "Happening today"'
+                  >
+                    {ev.isToday ? "Unmark today" : "Mark as today"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleStartEditEvent(ev)}
+                    className={ui.iconBtn}
+                    title="Edit"
+                    aria-label="Edit event"
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
-                      setShowAddMedia(false)
-                      setMediaFile(null)
-                      setMediaPreviewUrl(null)
-                      setMediaUploadError(null)
+                      if (confirm(`Delete "${ev.title}"?`)) engine.removeEvent(ev.id)
                     }}
-                    disabled={isUploadingMedia}
-                    className="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold cursor-pointer"
+                    className={ui.iconBtnDanger}
+                    title="Delete"
+                    aria-label="Delete event"
                   >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={
-                      !mediaFile || !mediaTitle.trim() || isUploadingMedia
-                    }
-                    className="px-5 py-2 rounded-xl bg-[#02275A] hover:bg-[#02275A]/80 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-2 cursor-pointer shadow-lg active:scale-95"
-                  >
-                    <Upload className="w-3.5 h-3.5" />
-                    <span>
-                      {isUploadingMedia
-                        ? mediaUploadProgress !== null && mediaUploadProgress < 100
-                          ? `Uploading... ${mediaUploadProgress}%`
-                          : "Publishing..."
-                        : "Publish to Live TV Slideshow"}
-                    </span>
+                    <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
-              </form>
-            )}
+              </li>
+            ),
+          )}
+        </ul>
+      )}
+    </>
+  )
 
-            {/* Slides in Rotation List */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs text-slate-400">
-                <span className="font-bold uppercase tracking-wider text-[11px]">
-                  Current Slides in TV Rotation Sequence (
-                  {(state.slides || []).length}):
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (
-                      confirm("Reset slideshow to default Hampton CS flyers?")
-                    ) {
-                      engine.resetSlidesToDefault()
-                    }
-                  }}
-                  className="text-[11px] text-slate-400 hover:text-white flex items-center gap-1 cursor-pointer"
-                >
-                  <RotateCcw className="w-3 h-3" />
-                  <span>Reset Defaults</span>
-                </button>
+  // ---------------------------------------------------------------- Labs
+  const renderLabsSection = () => (
+    <>
+      {renderSectionHeader(
+        "Labs & hours",
+        "Room status, opening hours and classes shown on the right side of the TV screen.",
+      )}
+
+      {([126, 127] as const).map((id) => {
+        const lab = state.labs[id]
+        if (!lab) return null
+        const effective = getEffectiveLabStatus(lab)
+        const statuses: LabStatus[] = ["Open", "Closed", "Reserved"]
+
+        return (
+          <section key={id} className={`${ui.card} divide-y divide-slate-100`}>
+            <div className={`${ui.cardBody} flex flex-wrap items-center justify-between gap-3`}>
+              <h2 className={ui.sectionTitle}>{LAB_TITLES[id] || lab.name}</h2>
+              <span className="text-sm text-slate-500">
+                TV shows: <span className="font-medium text-slate-900">{effective}</span>
+              </span>
+            </div>
+
+            <div className={`${ui.cardBody} space-y-2`}>
+              <span className={ui.label}>Status</span>
+              <div className="inline-flex" role="group" aria-label={`Lab ${id} status`}>
+                {statuses.map((st) => (
+                  <button
+                    key={st}
+                    type="button"
+                    onClick={() => engine.updateLab(id, { status: st })}
+                    aria-pressed={lab.status === st}
+                    className={segment(lab.status === st)}
+                  >
+                    {st}
+                  </button>
+                ))}
               </div>
+              {effective !== lab.status && (
+                <p className={ui.hint}>
+                  Showing "{effective}" right now because of the hours or class schedule
+                  below.
+                </p>
+              )}
+            </div>
 
-              <div className="space-y-2">
-                {(state.slides || []).map((slide, idx) => {
-                  const isCurrent = state.activeSlideIndex === idx
-                  const isVid =
-                    slide.mediaType === "video" ||
-                    Boolean(
-                      slide.url &&
-                        (slide.url.match(/\.(mp4|webm|mov|ogg)$/i) ||
-                          slide.url.startsWith("data:video/")),
-                    )
+            <div className={ui.cardBody}>
+              <span className={ui.label}>Hours</span>
+              <div className="divide-y divide-slate-100">
+                <LabHoursIntervalPicker
+                  label="Mon – Thu"
+                  value={lab.hours.monThu}
+                  onCommit={(v) =>
+                    engine.updateLab(id, { hours: { ...lab.hours, monThu: v } })
+                  }
+                />
+                <LabHoursIntervalPicker
+                  label="Friday"
+                  value={lab.hours.fri}
+                  onCommit={(v) =>
+                    engine.updateLab(id, { hours: { ...lab.hours, fri: v } })
+                  }
+                />
+                <LabHoursIntervalPicker
+                  label="Weekend"
+                  value={lab.hours.weekend || "Closed"}
+                  onCommit={(v) =>
+                    engine.updateLab(id, { hours: { ...lab.hours, weekend: v } })
+                  }
+                />
+              </div>
+            </div>
 
+            <div className={ui.cardBody}>
+              <LabClassScheduleManager lab={lab} engine={engine} />
+            </div>
+          </section>
+        )
+      })}
+    </>
+  )
+
+  // ---------------------------------------------------------------- Tutoring
+  const renderTutoringSection = () => {
+    const shifts = lab127?.tutorShifts || []
+    const tutorMap: Record<string, TutorShift[]> = {}
+    shifts.forEach((s) => {
+      if (!tutorMap[s.tutorName]) tutorMap[s.tutorName] = []
+      tutorMap[s.tutorName].push(s)
+    })
+
+    return (
+      <>
+        {renderSectionHeader(
+          "Tutoring",
+          "Peer tutors and their weekly hours in Lab 127.",
+          !showAddTutor && (
+            <button type="button" onClick={handleStartAddTutor} className={ui.btnPrimary}>
+              <Plus className="w-4 h-4" />
+              Add tutor
+            </button>
+          ),
+        )}
+
+        {showAddTutor && (
+          <form
+            onSubmit={handleSaveTutorSchedule}
+            className={`${ui.card} ${ui.cardBody} space-y-4`}
+          >
+            <h2 className={ui.sectionTitle}>
+              {editingTutorOriginalName ? `Edit ${editingTutorOriginalName}` : "New tutor"}
+            </h2>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className={ui.label} htmlFor="tutor-name">
+                  Name
+                </label>
+                <input
+                  id="tutor-name"
+                  type="text"
+                  required
+                  value={tutorName}
+                  onChange={(e) => setTutorName(e.target.value)}
+                  className={ui.input}
+                />
+              </div>
+              <div>
+                <label className={ui.label} htmlFor="tutor-course">
+                  Course
+                </label>
+                <select
+                  id="tutor-course"
+                  value={tutorCourse}
+                  onChange={(e) => setTutorCourse(e.target.value)}
+                  className={`${ui.select} w-full`}
+                >
+                  {/* Keep a tutor's existing course selectable even if it was removed from the list */}
+                  {(tutorCourses.includes(tutorCourse)
+                    ? tutorCourses
+                    : [tutorCourse, ...tutorCourses]
+                  ).map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+                <p className={`${ui.hint} mt-1`}>Used for all of this tutor's days.</p>
+              </div>
+            </div>
+
+            <div>
+              <span className={ui.label}>Weekly hours</span>
+              <div className="divide-y divide-slate-100 rounded-md border border-slate-200">
+                {WEEKDAYS.map((day) => {
+                  const entry = tutorDays[day]
                   return (
-                    <div key={slide.id} className="space-y-1.5">
-                      <div
-                        className={`p-3 rounded-xl border transition-all flex items-center justify-between gap-3 ${
-                          isCurrent
-                            ? "bg-blue-950/40 border-[#02275A] shadow-lg ring-1 ring-[#02275A]"
-                            : "bg-slate-800/60 border-slate-750 hover:bg-slate-800"
-                        }`}
-                      >
-                        {/* Left: Thumbnail & Details */}
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          <div className="relative w-16 h-12 rounded-lg overflow-hidden bg-black flex-shrink-0 border border-slate-700 flex items-center justify-center">
-                            {isVid ? (
-                              <div className="relative w-full h-full">
-                                <video
-                                  src={slide.url}
-                                  className="w-full h-full object-cover"
-                                  muted
-                                  preload="metadata"
-                                />
-                                <span className="absolute inset-0 flex items-center justify-center bg-black/40">
-                                  <Video className="w-4 h-4 text-white" />
-                                </span>
-                              </div>
-                            ) : (
-                              <img
-                                src={slide.url}
-                                alt={slide.title}
-                                className="w-full h-full object-cover"
-                              />
-                            )}
-                          </div>
-
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="text-[10px] font-black uppercase px-1.5 py-0.5 rounded bg-slate-700 text-slate-200">
-                                #{idx + 1}
-                              </span>
-                              <span
-                                className={`text-[10px] font-black uppercase px-1.5 py-0.5 rounded flex items-center gap-1 ${
-                                  isVid
-                                    ? "bg-red-900/60 text-red-200 border border-red-700/60"
-                                    : "bg-sky-900/60 text-sky-200 border border-sky-700/60"
-                                }`}
-                              >
-                                {isVid ? (
-                                  <Video className="w-2.5 h-2.5" />
-                                ) : (
-                                  <ImageIcon className="w-2.5 h-2.5" />
-                                )}
-                                <span>{isVid ? "Video" : "Photo"}</span>
-                              </span>
-                              <span className="text-[10px] font-bold text-sky-400 bg-[#02275A]/20 px-1.5 py-0.5 rounded">
-                                {slide.category}
-                              </span>
-                              <span className="text-[10px] text-slate-400 font-mono">
-                                {slide.durationSeconds || (isVid ? 12 : 6)}s
-                              </span>
-                              {isCurrent && (
-                                <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded bg-emerald-500 text-white animate-pulse">
-                                  Live on TV Now
-                                </span>
-                              )}
-                            </div>
-                            <h4 className="text-xs font-bold text-white truncate mt-1">
-                              {slide.title}
-                            </h4>
-                            <p className="text-[11px] text-slate-400 truncate">
-                              {slide.subtitle}
-                            </p>
-                          </div>
-                        </div>
-
-                        {/* Right: Actions */}
-                        <div className="flex items-center gap-1 flex-shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => handleStartEditSlide(slide)}
-                            title="Edit title, subtitle, description, category, or duration"
-                            className={`p-1.5 rounded-lg cursor-pointer transition-colors ${
-                              editingSlideId === slide.id
-                                ? "bg-sky-600 text-white"
-                                : "bg-slate-700 hover:bg-sky-600 text-slate-300 hover:text-white"
-                            }`}
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => engine.setActiveSlide(idx, true)}
-                            title="Show this slide on the TV right now"
-                            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-all ${
-                              isCurrent
-                                ? "bg-emerald-600 text-white"
-                                : "bg-slate-700 hover:bg-[#02275A] text-slate-200 hover:text-white"
-                            }`}
-                          >
-                            {isCurrent ? "Showing" : "Show on TV"}
-                          </button>
-
-                          <button
-                            type="button"
-                            disabled={idx === 0}
-                            onClick={() => handleMoveSlide(idx, "up")}
-                            title="Move slide earlier in rotation"
-                            className="p-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 disabled:opacity-30 text-white cursor-pointer"
-                          >
-                            <ArrowUp className="w-3.5 h-3.5" />
-                          </button>
-
-                          <button
-                            type="button"
-                            disabled={idx === (state.slides || []).length - 1}
-                            onClick={() => handleMoveSlide(idx, "down")}
-                            title="Move slide later in rotation"
-                            className="p-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 disabled:opacity-30 text-white cursor-pointer"
-                          >
-                            <ArrowDown className="w-3.5 h-3.5" />
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteSlide(slide.id)}
-                            title="Delete slide from TV"
-                            className="p-1.5 rounded-lg bg-slate-700 hover:bg-red-600 text-slate-300 hover:text-white cursor-pointer transition-colors"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Inline Slide Edit Form */}
-                      {editingSlideId === slide.id && (
-                        <form
-                          onSubmit={handleSaveEditSlide}
-                          className="p-3.5 bg-slate-900/95 rounded-xl border border-sky-500/50 space-y-2.5 animate-in fade-in duration-200 mt-1"
-                        >
-                          <div className="flex items-center justify-between pb-1 border-b border-slate-800">
-                            <span className="text-xs font-bold text-sky-400 flex items-center gap-1.5">
-                              <Pencil className="w-3.5 h-3.5" />
-                              <span>
-                                Edit Slide #{idx + 1} Info & Description
-                              </span>
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => setEditingSlideId(null)}
-                              className="text-slate-400 hover:text-white cursor-pointer"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                            <div>
-                              <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
-                                Headline Title
-                              </label>
-                              <input
-                                type="text"
-                                required
-                                value={editSlideTitle}
-                                onChange={(e) =>
-                                  setEditSlideTitle(e.target.value)
-                                }
-                                className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none focus:border-[#02275A]"
-                              />
-                            </div>
-
-                            <div>
-                              <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
-                                Subtitle / Department
-                              </label>
-                              <input
-                                type="text"
-                                value={editSlideSubtitle}
-                                onChange={(e) =>
-                                  setEditSlideSubtitle(e.target.value)
-                                }
-                                className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none focus:border-[#02275A]"
-                              />
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                            <div>
-                              <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
-                                Category Badge
-                              </label>
-                              <input
-                                type="text"
-                                value={editSlideCategory}
-                                onChange={(e) =>
-                                  setEditSlideCategory(e.target.value)
-                                }
-                                placeholder="e.g. Club Announcement, Industry Partner"
-                                className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none focus:border-[#02275A]"
-                              />
-                            </div>
-
-                            <div>
-                              <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
-                                Display Duration (Seconds)
-                              </label>
-                              <input
-                                type="number"
-                                min={3}
-                                max={120}
-                                value={editSlideDuration}
-                                onChange={(e) =>
-                                  setEditSlideDuration(Number(e.target.value))
-                                }
-                                className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none focus:border-[#02275A] font-mono"
-                              />
-                            </div>
-                          </div>
-
-                          <div>
-                            <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
-                              Slide Description / Caption (Shown on TV)
-                            </label>
-                            <textarea
-                              rows={2}
-                              value={editSlideCaption}
-                              onChange={(e) =>
-                                setEditSlideCaption(e.target.value)
-                              }
-                              placeholder="Detailed caption or description shown across bottom of TV screen..."
-                              className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none focus:border-[#02275A] resize-none"
-                            />
-                          </div>
-
-                          <div className="flex items-center gap-2 pt-1">
-                            <button
-                              type="submit"
-                              className="py-1.5 px-4 rounded-lg bg-[#02275A] hover:bg-blue-600 text-white font-bold text-xs flex items-center gap-1.5 shadow cursor-pointer transition"
-                            >
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                              <span>Save Changes to TV</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setEditingSlideId(null)}
-                              className="py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs cursor-pointer transition"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </form>
+                    <div key={day} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
+                      <label className="inline-flex w-32 items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={entry.enabled}
+                          onChange={(e) => {
+                            const isChecked = e.target.checked
+                            setTutorDays((prev) => ({
+                              ...prev,
+                              [day]: { ...prev[day], enabled: isChecked },
+                            }))
+                          }}
+                          className="h-4 w-4 rounded border-slate-300 accent-[#02275A]"
+                        />
+                        {DAY_NAMES[day]}
+                      </label>
+                      {entry.enabled ? (
+                        <input
+                          type="text"
+                          value={entry.time}
+                          onChange={(e) => {
+                            const val = e.target.value
+                            setTutorDays((prev) => ({
+                              ...prev,
+                              [day]: { ...prev[day], time: val },
+                            }))
+                          }}
+                          placeholder="2:00 PM – 4:00 PM"
+                          aria-label={`${DAY_NAMES[day]} hours`}
+                          className={`${ui.input} flex-1 min-w-[12rem]`}
+                        />
+                      ) : (
+                        <span className="text-sm text-slate-400">Not tutoring</span>
                       )}
                     </div>
                   )
                 })}
               </div>
-            </div>
-          </div>
-
-          {/* 5. Event Announcements Management */}
-          <div className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="font-extrabold text-sm sm:text-base text-white uppercase tracking-wider flex items-center gap-2">
-                <Clock className="w-5 h-5 text-emerald-400" />
-                Manage Event Announcements ({state.events.length})
-              </h3>
-              <div className="flex items-center gap-2">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".ics,text/calendar"
-                  onChange={handleIcsFile}
-                  className="hidden"
-                />
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all"
-                >
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>Import .ics</span>
-                </button>
-                <button
-                  onClick={() => setShowAddEvent(!showAddEvent)}
-                  className="py-1.5 px-3 rounded-xl bg-[#02275A] hover:bg-[#02275A]/80 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>
-                    {showAddEvent ? "Cancel" : "Add New Announcement"}
-                  </span>
-                </button>
-              </div>
+              <p className={`${ui.hint} mt-1`}>
+                Split hours like "1:00 PM – 2:00 PM &amp; 3:00 PM – 6:00 PM".
+              </p>
             </div>
 
-            {importMsg && (
-              <div
-                className={`flex items-start justify-between gap-3 p-3 rounded-xl text-xs border ${
-                  importMsg.type === "ok"
-                    ? "bg-emerald-950/50 border-emerald-700 text-emerald-200"
-                    : "bg-red-950/50 border-red-800 text-red-200"
-                }`}
+            <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddTutor(false)
+                  setEditingTutorOriginalName(null)
+                }}
+                className={ui.btnSecondary}
               >
-                <span>{importMsg.text}</span>
-                <button
-                  onClick={() => setImportMsg(null)}
-                  className="text-white/60 hover:text-white cursor-pointer flex-shrink-0"
-                >
-                  Dismiss
-                </button>
-              </div>
-            )}
+                Cancel
+              </button>
+              <button type="submit" className={ui.btnPrimary}>
+                Save tutor
+              </button>
+            </div>
+          </form>
+        )}
 
-            {showAddEvent && (
-              <form
-                onSubmit={handleAddEventSubmit}
-                className="space-y-3 bg-slate-800/90 p-4 rounded-xl border border-slate-700"
-              >
-                <div>
-                  <label className="text-[11px] text-slate-400 uppercase font-bold block mb-1">
-                    Event Title
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. ACM Coding Interview Workshop"
-                    value={eventTitle}
-                    onChange={(e) => setEventTitle(e.target.value)}
-                    className="w-full px-3.5 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-[#02275A]"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-[11px] text-slate-400 uppercase font-bold block mb-1">
-                      Date
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={eventDate}
-                      onChange={(e) => setEventDate(e.target.value)}
-                      className="w-full px-3.5 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] text-slate-400 uppercase font-bold block mb-1">
-                      Time
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={eventTime}
-                      onChange={(e) => setEventTime(e.target.value)}
-                      className="w-full px-3.5 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-[11px] text-slate-400 uppercase font-bold block mb-1">
-                      Location
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={eventLocation}
-                      onChange={(e) => setEventLocation(e.target.value)}
-                      className="w-full px-3.5 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] text-slate-400 uppercase font-bold block mb-1">
-                      Category
-                    </label>
-                    <select
-                      value={eventCategory}
-                      onChange={(e) => setEventCategory(e.target.value as any)}
-                      className="w-full px-3.5 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none"
-                    >
-                      <option value="Capstone">Capstone</option>
-                      <option value="Workshop">Workshop</option>
-                      <option value="Club">Club</option>
-                      <option value="Lecture">Lecture</option>
-                      <option value="Career">Career</option>
-                      <option value="Hackathon">Hackathon</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-[11px] text-slate-400 uppercase font-bold block mb-1">
-                    Event Description / Notes (Optional)
-                  </label>
-                  <textarea
-                    rows={2}
-                    placeholder="Event details or agenda shown on TV announcement cards..."
-                    value={eventDescription}
-                    onChange={(e) => setEventDescription(e.target.value)}
-                    className="w-full px-3.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-[#02275A] resize-none"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2 pt-1">
-                  <input
-                    type="checkbox"
-                    id="eventTodayManage"
-                    checked={eventIsToday}
-                    onChange={(e) => setEventIsToday(e.target.checked)}
-                    className="rounded text-[#02275A]"
-                  />
-                  <label
-                    htmlFor="eventTodayManage"
-                    className="text-xs text-white font-medium cursor-pointer"
-                  >
-                    Feature in &quot;Happening Today&quot; spotlight
-                  </label>
-                </div>
-
-                <button
-                  type="submit"
-                  className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md transition-all cursor-pointer"
-                >
-                  Publish Announcement (Instantly shows on TV autoscroll ticker)
-                </button>
-              </form>
-            )}
-
-            {/* Existing Announcements List with Edit, Delete & Set Today */}
-            <div className="space-y-2 max-h-72 overflow-y-auto pr-1 scrollbar-thin">
-              {state.events.length === 0 ? (
-                <p className="text-xs text-slate-500 italic p-3 text-center bg-slate-800/40 rounded-xl">
-                  No event announcements active. Click &quot;Add New
-                  Announcement&quot; or import an .ics file above.
-                </p>
-              ) : (
-                state.events.map((ev) => {
-                  const isEditing = editingEventId === ev.id
-
-                  if (isEditing) {
-                    return (
-                      <form
-                        key={ev.id}
-                        onSubmit={handleSaveEditEvent}
-                        className="p-3.5 rounded-xl bg-slate-900 border border-emerald-500/60 shadow-lg space-y-2.5 animate-in fade-in duration-200"
-                      >
-                        <div className="flex items-center justify-between pb-1 border-b border-slate-800">
-                          <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
-                            <Pencil className="w-3.5 h-3.5" />
-                            <span>Edit Event Announcement</span>
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setEditingEventId(null)}
-                            className="text-slate-400 hover:text-white cursor-pointer"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-
-                        <div>
-                          <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
-                            Event Title
-                          </label>
-                          <input
-                            type="text"
-                            required
-                            value={editEventTitle}
-                            onChange={(e) => setEditEventTitle(e.target.value)}
-                            className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none focus:border-[#02275A]"
-                          />
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-2">
-                          <div>
-                            <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
-                              Date
-                            </label>
-                            <input
-                              type="text"
-                              required
-                              value={editEventDate}
-                              onChange={(e) => setEditEventDate(e.target.value)}
-                              className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
-                              Time
-                            </label>
-                            <input
-                              type="text"
-                              required
-                              value={editEventTime}
-                              onChange={(e) => setEditEventTime(e.target.value)}
-                              className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-2">
-                          <div>
-                            <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
-                              Location
-                            </label>
-                            <input
-                              type="text"
-                              required
-                              value={editEventLocation}
-                              onChange={(e) =>
-                                setEditEventLocation(e.target.value)
-                              }
-                              className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
-                              Category
-                            </label>
-                            <select
-                              value={editEventCategory}
-                              onChange={(e) =>
-                                setEditEventCategory(e.target.value as any)
-                              }
-                              className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none"
-                            >
-                              <option value="Capstone">Capstone</option>
-                              <option value="Workshop">Workshop</option>
-                              <option value="Club">Club</option>
-                              <option value="Lecture">Lecture</option>
-                              <option value="Career">Career</option>
-                              <option value="Hackathon">Hackathon</option>
-                            </select>
-                          </div>
-                        </div>
-
-                        <div>
-                          <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
-                            Description / Summary
-                          </label>
-                          <textarea
-                            rows={2}
-                            value={editEventDescription}
-                            onChange={(e) =>
-                              setEditEventDescription(e.target.value)
-                            }
-                            placeholder="Brief description or agenda..."
-                            className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white focus:outline-none focus:border-[#02275A] resize-none"
-                          />
-                        </div>
-
-                        <div className="flex items-center gap-2 pt-1">
-                          <input
-                            type="checkbox"
-                            id={`eventTodayEdit-${ev.id}`}
-                            checked={editEventIsToday}
-                            onChange={(e) =>
-                              setEditEventIsToday(e.target.checked)
-                            }
-                            className="rounded text-[#02275A]"
-                          />
-                          <label
-                            htmlFor={`eventTodayEdit-${ev.id}`}
-                            className="text-xs text-white font-medium cursor-pointer"
-                          >
-                            Feature in &quot;Happening Today&quot; spotlight
-                          </label>
-                        </div>
-
-                        <div className="flex items-center gap-2 pt-1">
-                          <button
-                            type="submit"
-                            className="py-1.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1 shadow cursor-pointer transition"
-                          >
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>Save Event Changes</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setEditingEventId(null)}
-                            className="py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs cursor-pointer transition"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </form>
-                    )
-                  }
-
-                  return (
-                    <div
-                      key={ev.id}
-                      className="p-3 rounded-xl bg-slate-800/90 border border-slate-700/60 flex items-center justify-between gap-3 text-xs"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-bold text-white truncate">
-                            {ev.title}
-                          </span>
-                          <span className="text-[9px] font-semibold uppercase px-1.5 py-0.2 rounded bg-slate-700 text-sky-300">
-                            {ev.category}
-                          </span>
-                          {ev.isToday && (
-                            <span className="text-[9px] font-bold bg-amber-400 text-slate-950 px-1.5 py-0.2 rounded uppercase">
-                              Today
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[11px] text-slate-400 mt-0.5">
-                          {ev.date} · {ev.time} · {ev.location}
-                        </div>
-                        {ev.description && (
-                          <div className="text-[10px] text-slate-400/80 italic mt-0.5 truncate">
-                            {ev.description}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-1.5 flex-shrink-0">
-                        <button
-                          onClick={() => handleStartEditEvent(ev)}
-                          title="Edit event details or description"
-                          className="p-1.5 rounded-lg bg-slate-700 hover:bg-sky-600 text-slate-300 hover:text-white cursor-pointer transition-colors"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() =>
-                            engine.updateEvent(ev.id, { isToday: !ev.isToday })
-                          }
-                          className="px-2 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-200 text-[10px] font-semibold cursor-pointer"
-                        >
-                          {ev.isToday ? "Unset Today" : "Set Today"}
-                        </button>
-                        <button
-                          onClick={() => engine.removeEvent(ev.id)}
-                          title="Delete announcement"
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-950/40 cursor-pointer transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
+        {Object.keys(tutorMap).length === 0 ? (
+          <div className={ui.empty}>No tutors yet.</div>
+        ) : (
+          <ul className={`${ui.card} divide-y divide-slate-100`}>
+            {Object.entries(tutorMap).map(([tutor, tShifts]) => {
+              const courses = Array.from(new Set(tShifts.map((s) => s.course)))
+              return (
+                <li key={tutor} className="flex items-start gap-3 px-4 py-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium text-slate-900">{tutor}</span>
+                      {courses.map((c) => (
+                        <span key={c} className={`${ui.badge} bg-slate-100 text-slate-700`}>
+                          {c}
+                        </span>
+                      ))}
                     </div>
-                  )
-                })
-              )}
+                    <dl className="mt-1 grid grid-cols-[3rem_1fr] gap-x-2 text-sm">
+                      {WEEKDAYS.flatMap((d) =>
+                        tShifts
+                          .filter((s) => s.day === d)
+                          .map((s) => (
+                            <React.Fragment key={s.id}>
+                              <dt className="text-slate-500">{s.day}</dt>
+                              <dd className="text-slate-700">{s.time}</dd>
+                            </React.Fragment>
+                          )),
+                      )}
+                    </dl>
+                  </div>
+                  <div className="flex flex-shrink-0 items-center gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => handleStartEditTutor(tutor, tShifts)}
+                      className={ui.iconBtn}
+                      title="Edit"
+                      aria-label={`Edit ${tutor}`}
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteTutor(tutor)}
+                      className={ui.iconBtnDanger}
+                      title="Remove"
+                      aria-label={`Remove ${tutor}`}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+
+        {isAdmin && (
+          <section className={`${ui.card} ${ui.cardBody} space-y-3`}>
+            <div>
+              <h2 className={ui.sectionTitle}>Courses</h2>
+              <p className={ui.hint}>
+                The courses tutors can be assigned to. Only admins can change this list.
+              </p>
             </div>
+            <ul className="flex flex-wrap gap-2">
+              {tutorCourses.map((c) => (
+                <li
+                  key={c}
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 py-1 pl-2.5 pr-1 text-sm text-slate-800"
+                >
+                  {c}
+                  {tutorCourses.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveCourse(c)}
+                      className="inline-flex h-6 w-6 items-center justify-center rounded text-slate-400 hover:bg-red-50 hover:text-red-600 cursor-pointer"
+                      title="Remove course"
+                      aria-label={`Remove ${c}`}
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <form onSubmit={handleAddCourse} className="flex gap-2">
+              <input
+                type="text"
+                value={newCourseName}
+                onChange={(e) => setNewCourseName(e.target.value)}
+                placeholder="e.g. 301 or Discrete Math"
+                aria-label="New course name"
+                className={`${ui.input} max-w-xs`}
+              />
+              <button
+                type="submit"
+                disabled={!newCourseName.trim()}
+                className={ui.btnSecondary}
+              >
+                <Plus className="w-4 h-4" />
+                Add course
+              </button>
+            </form>
+          </section>
+        )}
+      </>
+    )
+  }
+
+  // ---------------------------------------------------------------- Alert
+  const alertLevelStyles: Record<"info" | "warning" | "emergency", string> = {
+    info: "border-sky-200 bg-sky-50 text-sky-900",
+    warning: "border-amber-200 bg-amber-50 text-amber-900",
+    emergency: "border-red-200 bg-red-50 text-red-900",
+  }
+  const alertLevelLabels: Record<"info" | "warning" | "emergency", string> = {
+    info: "Info",
+    warning: "Warning",
+    emergency: "Emergency",
+  }
+
+  const renderAlertSection = () => (
+    <>
+      {renderSectionHeader(
+        "Alert banner",
+        "Show an urgent message across every TV screen until you remove it.",
+      )}
+
+      {state.urgentAlert?.active && (
+        <div
+          className={`flex flex-wrap items-start justify-between gap-3 rounded-lg border p-4 ${
+            alertLevelStyles[state.urgentAlert.level]
+          }`}
+        >
+          <div className="min-w-0">
+            <p className="text-xs font-medium uppercase tracking-wide opacity-70">
+              Showing now · {alertLevelLabels[state.urgentAlert.level]}
+            </p>
+            <p className="mt-1 text-sm font-medium">{state.urgentAlert.message}</p>
+          </div>
+          <button type="button" onClick={handleDismissAlert} className={ui.btnDanger}>
+            Remove banner
+          </button>
+        </div>
+      )}
+
+      <form onSubmit={handleBroadcastAlert} className={`${ui.card} ${ui.cardBody} space-y-4`}>
+        <div>
+          <label className={ui.label} htmlFor="alert-message">
+            Message
+          </label>
+          <textarea
+            id="alert-message"
+            rows={3}
+            value={alertText}
+            onChange={(e) => setAlertText(e.target.value)}
+            placeholder="Lab 126 is closed today for maintenance."
+            className={`${ui.input} resize-none`}
+          />
+        </div>
+        <div>
+          <span className={ui.label}>Level</span>
+          <div className="inline-flex" role="group" aria-label="Alert level">
+            {(["info", "warning", "emergency"] as const).map((level) => (
+              <button
+                key={level}
+                type="button"
+                onClick={() => setAlertLevel(level)}
+                aria-pressed={alertLevel === level}
+                className={segment(alertLevel === level)}
+              >
+                {alertLevelLabels[level]}
+              </button>
+            ))}
           </div>
         </div>
+        <div className="flex justify-end border-t border-slate-100 pt-4">
+          <button type="submit" disabled={!alertText.trim()} className={ui.btnPrimary}>
+            {state.urgentAlert?.active ? "Replace banner" : "Show on all screens"}
+          </button>
+        </div>
+      </form>
+    </>
+  )
 
-        {/* Right Side: Optional Side-by-Side Live TV Preview */}
-        {showLivePreview && (
-          <div className="w-[50%] h-full border-l-2 border-[#02275A]/40 flex flex-col bg-[#02275A] overflow-hidden">
-            <div className="flex-shrink-0 h-10 bg-slate-900 border-b border-white/10 px-4 flex items-center justify-between text-xs">
-              <span className="font-bold text-sky-400 flex items-center gap-1.5">
-                <Tv className="w-3.5 h-3.5" />
-                Live TV Preview (Simulated Screen)
-              </span>
-              <span className="text-[10px] text-emerald-400 font-mono">
-                Receiving Live Sync
-              </span>
-            </div>
+  // ---------------------------------------------------------------- Preview
+  const renderPreviewSection = () => (
+    <>
+      {renderSectionHeader(
+        "Preview & layout",
+        "See the TV screen as it looks right now, and adjust how each photo is framed.",
+      )}
+      <TvPreviewPanel
+        key={previewSlideId || "preview"}
+        state={state}
+        connectedClients={connectedClients}
+        engine={engine}
+        initialSlideId={previewSlideId}
+      />
+    </>
+  )
 
-            <div className="flex-1 min-h-0 flex bg-[#F3F8FC]">
-              {/* Left Column */}
-              <div className="w-[30%] h-full">
-                <EventAnnouncements events={state.events} isTvMode={true} />
+  const sectionContent: Record<Section, () => React.ReactNode> = {
+    slides: renderSlidesSection,
+    preview: renderPreviewSection,
+    events: renderEventsSection,
+    labs: renderLabsSection,
+    tutoring: renderTutoringSection,
+    alert: renderAlertSection,
+  }
+
+  return (
+    <div className="w-screen h-screen flex flex-col bg-slate-50 text-slate-900 overflow-hidden font-sans antialiased">
+      <header className="flex h-14 flex-shrink-0 items-center justify-end gap-3 border-b border-slate-200 bg-white px-4 sm:px-6">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onNavigateToTv}
+            className={ui.btnSecondary}
+            title="Open the TV display"
+          >
+            <Tv className="w-4 h-4" />
+            <span className="hidden sm:inline">TV display</span>
+          </button>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => setShowAdminPortal(true)}
+              className={ui.btnSecondary}
+              title="Manage staff accounts and view activity"
+            >
+              <ShieldCheck className="w-4 h-4" />
+              <span className="hidden sm:inline">Users &amp; activity</span>
+            </button>
+          )}
+
+          <div className="ml-1 flex items-center gap-2 border-l border-slate-200 pl-3">
+            <div
+              className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-sm font-medium text-white"
+              style={{ backgroundColor: authenticatedUser.avatarColor || "#02275A" }}
+              aria-hidden="true"
+            >
+              {authenticatedUser.fullName.charAt(0) || "U"}
+            </div>
+            <div className="hidden md:block leading-tight">
+              <div className="text-sm font-medium text-slate-900">
+                {authenticatedUser.fullName}
               </div>
-              {/* Center Screen */}
-              <div className="flex-1 min-w-0 h-full">
-                <CenterDisplay
-                  activeSlideIndex={state.activeSlideIndex}
-                  isPaused={state.isCarouselPaused}
-                  urgentAlert={state.urgentAlert}
-                  onSlideChange={(idx) => engine.setActiveSlide(idx)}
-                  onTogglePause={(p) => engine.toggleCarouselPause(p)}
-                />
-              </div>
-              {/* Right Column */}
-              <div className="w-[28%] h-full">
-                <RightPanel labs={state.labs} isTvMode={true} />
+              <div className="text-xs text-slate-500">
+                {authenticatedUser.role ?? "Pending approval"}
               </div>
             </div>
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className={ui.iconBtn}
+              title="Sign out"
+              aria-label="Sign out"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
-        )}
+        </div>
+      </header>
+
+      <div className="flex flex-1 min-h-0">
+        <nav
+          className="hidden md:flex w-56 flex-shrink-0 flex-col gap-0.5 border-r border-slate-200 bg-white p-3"
+          aria-label="Sections"
+        >
+          {navItems.map((item) => {
+            const Icon = item.icon
+            const active = section === item.id
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setSection(item.id)}
+                aria-current={active ? "page" : undefined}
+                className={`flex items-center justify-between rounded-md px-3 py-2 text-sm font-medium cursor-pointer ${
+                  active
+                    ? "bg-slate-100 text-slate-900"
+                    : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                }`}
+              >
+                <span className="flex items-center gap-2.5">
+                  <Icon className={`h-4 w-4 ${active ? "text-[#02275A]" : "text-slate-400"}`} />
+                  {item.label}
+                </span>
+                {item.meta}
+              </button>
+            )
+          })}
+        </nav>
+
+        <main className="flex-1 min-w-0 overflow-y-auto">
+          <nav
+            className="md:hidden flex gap-1 overflow-x-auto border-b border-slate-200 bg-white px-2"
+            aria-label="Sections"
+          >
+            {navItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setSection(item.id)}
+                aria-current={section === item.id ? "page" : undefined}
+                className={`whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-medium cursor-pointer ${
+                  section === item.id
+                    ? "border-[#02275A] text-slate-900"
+                    : "border-transparent text-slate-500"
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+
+          <div
+            className={`mx-auto space-y-5 p-4 sm:p-6 ${
+              section === "preview" ? "max-w-6xl" : "max-w-4xl"
+            }`}
+          >
+            {sectionContent[section]()}
+          </div>
+        </main>
       </div>
 
       {/* Admin Portal Modal */}

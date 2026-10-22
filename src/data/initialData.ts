@@ -8,6 +8,15 @@ import type { SignageState, SlideItem } from "../types/signage"
 
 export const INITIAL_SLIDES: SlideItem[] = []
 
+/** Tutoring courses offered before an admin edits the list. */
+export const DEFAULT_TUTOR_COURSES = ["151 & 152", "251"]
+
+export function getTutorCourses(state: SignageState): string[] {
+  return state.tutorCourses && state.tutorCourses.length > 0
+    ? state.tutorCourses
+    : DEFAULT_TUTOR_COURSES
+}
+
 export const INITIAL_STATE: SignageState = {
   version: 1,
   labs: {

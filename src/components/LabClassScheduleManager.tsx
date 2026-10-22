@@ -1,8 +1,9 @@
 import React, { useState } from "react"
-import { BookOpen, Plus, Trash2, Clock, Calendar, Check, AlertCircle } from "lucide-react"
+import { Plus, Trash2 } from "lucide-react"
 import type { LabInfo, LabClassSession, WeekDay } from "../types/signage"
 import { TIME_INTERVALS_15_MIN, getActiveClassForLab, isTimeInRange } from "../utils/labHours"
 import type { SyncEngine } from "../services/syncEngine"
+import { ui } from "./manageStyles"
 
 const ALL_DAYS: WeekDay[] = ["Mon", "Tue", "Wed", "Thu", "Fri"]
 
@@ -34,11 +35,11 @@ export default function LabClassScheduleManager({
   const handleAddClass = (e: React.FormEvent) => {
     e.preventDefault()
     if (!className.trim()) {
-      alert("Please enter a class name (e.g. CSC 151)")
+      alert("Enter a class name, e.g. CSC 151.")
       return
     }
     if (selectedDays.length === 0) {
-      alert("Please select at least one day for this class.")
+      alert("Pick at least one day.")
       return
     }
 
@@ -57,88 +58,70 @@ export default function LabClassScheduleManager({
   }
 
   const handleDeleteClass = (classId: string, name: string) => {
-    if (confirm(`Remove "${name}" from Lab ${lab.id} class schedule?`)) {
+    if (confirm(`Remove "${name}" from the Lab ${lab.id} schedule?`)) {
       engine.removeClassSession(lab.id, classId)
     }
   }
 
+  const todayKey = ALL_DAYS[new Date().getDay() - 1] as WeekDay | undefined
+
   return (
-    <div className="pt-3 border-t border-slate-700/80 space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <BookOpen className="w-4 h-4 text-amber-400" />
-          <h4 className="text-xs font-bold text-white uppercase tracking-wider">
-            Class Schedule (Room In-Class Periods)
-          </h4>
+    <div className="space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h4 className="text-sm font-semibold text-slate-900">Classes</h4>
+          <p className={ui.hint}>
+            While a class is in session, the TV shows this lab as "In Class".
+          </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowAddForm(!showAddForm)}
-          className="px-2 py-1 rounded bg-[#02275A] hover:bg-[#02275A]/80 text-white text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer shadow-sm active:scale-95"
-        >
-          <Plus className="w-3 h-3" />
-          <span>{showAddForm ? "Cancel" : "Add Class"}</span>
-        </button>
+        {!showAddForm && (
+          <button
+            type="button"
+            onClick={() => setShowAddForm(true)}
+            className={ui.btnSecondary}
+          >
+            <Plus className="w-4 h-4" />
+            Add class
+          </button>
+        )}
       </div>
 
-      <p className="text-[10px] text-slate-400">
-        When a class is in session at the current day and time, the TV board will automatically switch status to{" "}
-        <span className="text-amber-400 font-bold">IN CLASS</span>.
-      </p>
-
-      {/* Active in-session alert if currently in class */}
-      {activeClassNow && (
-        <div className="p-2.5 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center gap-2 text-amber-300 text-xs font-semibold">
-          <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping flex-shrink-0" />
-          <span>
-            Class in session now: <strong className="text-white">{activeClassNow.className}</strong> ({activeClassNow.startTime} – {activeClassNow.endTime})
-          </span>
-        </div>
-      )}
-
-      {/* Add New Class Form */}
       {showAddForm && (
         <form
           onSubmit={handleAddClass}
-          className="p-3 rounded-lg bg-slate-950/80 border border-slate-700 space-y-3 shadow-inner"
+          className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3"
         >
-          <div className="text-xs font-extrabold text-sky-400 flex items-center gap-1.5">
-            <Plus className="w-3.5 h-3.5" />
-            <span>Schedule New Class for Room {lab.id}</span>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
-                Class Name / Course *
+              <label className={ui.label} htmlFor={`class-name-${lab.id}`}>
+                Class name
               </label>
               <input
+                id={`class-name-${lab.id}`}
                 type="text"
-                placeholder="e.g. CSC 151: Computer Science I"
+                placeholder="CSC 151: Computer Science I"
                 value={className}
                 onChange={(e) => setClassName(e.target.value)}
-                className="w-full px-2.5 py-1.5 rounded bg-slate-900 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#02275A]"
+                className={ui.input}
               />
             </div>
             <div>
-              <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
-                Instructor (Optional)
+              <label className={ui.label} htmlFor={`class-instructor-${lab.id}`}>
+                Instructor <span className="font-normal text-slate-500">(optional)</span>
               </label>
               <input
+                id={`class-instructor-${lab.id}`}
                 type="text"
-                placeholder="e.g. Dr. Adams"
+                placeholder="Dr. Adams"
                 value={instructor}
                 onChange={(e) => setInstructor(e.target.value)}
-                className="w-full px-2.5 py-1.5 rounded bg-slate-900 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#02275A]"
+                className={ui.input}
               />
             </div>
           </div>
 
-          {/* Days Selection */}
           <div>
-            <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
-              Class Days
-            </label>
+            <span className={ui.label}>Days</span>
             <div className="flex gap-1.5 flex-wrap">
               {ALL_DAYS.map((day) => {
                 const isSelected = selectedDays.includes(day)
@@ -147,10 +130,11 @@ export default function LabClassScheduleManager({
                     key={day}
                     type="button"
                     onClick={() => toggleDay(day)}
-                    className={`px-3 py-1 rounded text-xs font-bold transition-all cursor-pointer ${
+                    aria-pressed={isSelected}
+                    className={`rounded-md border px-3 py-1.5 text-sm font-medium cursor-pointer ${
                       isSelected
-                        ? "bg-[#02275A] text-white shadow-sm"
-                        : "bg-slate-800 text-slate-400 hover:text-white border border-slate-700"
+                        ? "border-[#02275A] bg-[#02275A] text-white"
+                        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                     }`}
                   >
                     {day}
@@ -160,16 +144,14 @@ export default function LabClassScheduleManager({
             </div>
           </div>
 
-          {/* 15-Minute Interval Times */}
           <div>
-            <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
-              Class Time (15-Minute Intervals)
-            </label>
+            <span className={ui.label}>Time</span>
             <div className="flex items-center gap-2">
               <select
                 value={startTime}
                 onChange={(e) => setStartTime(e.target.value)}
-                className="bg-slate-900 border border-slate-700 text-white rounded px-2.5 py-1.5 text-xs font-mono focus:outline-none focus:border-[#02275A] cursor-pointer"
+                aria-label="Start time"
+                className={ui.select}
               >
                 {TIME_INTERVALS_15_MIN.map((t) => (
                   <option key={t} value={t}>
@@ -177,13 +159,12 @@ export default function LabClassScheduleManager({
                   </option>
                 ))}
               </select>
-
-              <span className="text-slate-400 font-bold">to</span>
-
+              <span className="text-sm text-slate-500">to</span>
               <select
                 value={endTime}
                 onChange={(e) => setEndTime(e.target.value)}
-                className="bg-slate-900 border border-slate-700 text-white rounded px-2.5 py-1.5 text-xs font-mono focus:outline-none focus:border-[#02275A] cursor-pointer"
+                aria-label="End time"
+                className={ui.select}
               >
                 {TIME_INTERVALS_15_MIN.map((t) => (
                   <option key={t} value={t}>
@@ -194,91 +175,63 @@ export default function LabClassScheduleManager({
             </div>
           </div>
 
-          <div className="flex justify-end gap-2 pt-1 border-t border-slate-800">
+          <div className="flex justify-end gap-2">
             <button
               type="button"
               onClick={() => setShowAddForm(false)}
-              className="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold cursor-pointer"
+              className={ui.btnSecondary}
             >
               Cancel
             </button>
-            <button
-              type="submit"
-              className="px-3.5 py-1 rounded bg-[#02275A] hover:bg-[#02275A]/90 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-md"
-            >
-              <Check className="w-3.5 h-3.5" />
-              <span>Save Class</span>
+            <button type="submit" className={ui.btnPrimary}>
+              Save class
             </button>
           </div>
         </form>
       )}
 
-      {/* Class List */}
       {classes.length === 0 ? (
-        <div className="p-3 rounded-lg bg-slate-950/40 border border-dashed border-slate-800 text-center text-xs text-slate-500 italic">
-          No classes scheduled for Room {lab.id}. Click "Add Class" to input class times.
-        </div>
+        <p className="text-sm text-slate-500">No classes scheduled.</p>
       ) : (
-        <div className="space-y-1.5">
+        <ul className="divide-y divide-slate-100 rounded-md border border-slate-200">
           {classes.map((c) => {
             const isActiveNow =
               activeClassNow?.id === c.id ||
-              (c.days.includes(
-                (ALL_DAYS[new Date().getDay() - 1] as WeekDay) || "Mon",
-              ) &&
+              (!!todayKey &&
+                c.days.includes(todayKey) &&
                 isTimeInRange(c.startTime, c.endTime))
 
             return (
-              <div
-                key={c.id}
-                className={`flex items-center justify-between p-2 rounded-lg border transition-all text-xs ${
-                  isActiveNow
-                    ? "bg-amber-500/10 border-amber-500/40 shadow-sm"
-                    : "bg-slate-800/60 hover:bg-slate-800 border-slate-700/60"
-                }`}
-              >
-                <div className="flex-1 min-w-0 pr-2">
+              <li key={c.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="font-extrabold text-white truncate">
+                    <span className="truncate text-sm font-medium text-slate-900">
                       {c.className}
                     </span>
                     {isActiveNow && (
-                      <span className="px-1.5 py-0.2 rounded bg-amber-500 text-black font-black text-[9px] uppercase tracking-wider animate-pulse flex-shrink-0">
-                        In Session
+                      <span className={`${ui.badge} bg-amber-100 text-amber-800`}>
+                        In session
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
-                    <span className="font-mono text-sky-300 font-bold">
-                      {c.days.join(", ")}
-                    </span>
-                    <span>•</span>
-                    <span className="font-mono text-slate-300">
-                      {c.startTime} – {c.endTime}
-                    </span>
-                    {c.instructor && (
-                      <>
-                        <span>•</span>
-                        <span className="italic text-slate-400">
-                          {c.instructor}
-                        </span>
-                      </>
-                    )}
-                  </div>
+                  <p className="text-sm text-slate-500">
+                    {c.days.join(", ")} · {c.startTime} – {c.endTime}
+                    {c.instructor && ` · ${c.instructor}`}
+                  </p>
                 </div>
-
                 <button
                   type="button"
                   onClick={() => handleDeleteClass(c.id, c.className)}
-                  className="p-1.5 rounded hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-colors cursor-pointer flex-shrink-0"
-                  title="Remove this class"
+                  className={ui.iconBtnDanger}
+                  title="Remove class"
+                  aria-label={`Remove ${c.className}`}
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
+                  <Trash2 className="w-4 h-4" />
                 </button>
-              </div>
+              </li>
             )
           })}
-        </div>
+        </ul>
       )}
     </div>
   )

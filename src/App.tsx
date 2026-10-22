@@ -1,8 +1,5 @@
 import React, { useState, useEffect } from "react"
-import Header from "./components/Header"
-import EventAnnouncements from "./components/EventAnnouncements"
-import CenterDisplay from "./components/CenterDisplay"
-import RightPanel from "./components/RightPanel"
+import TvScreen from "./components/TvScreen"
 import ManagePage from "./components/ManagePage"
 import { getSyncEngine } from "./services/syncEngine"
 import type { SignageState, ConnectedClient } from "./types/signage"
@@ -116,37 +113,16 @@ export default function App() {
     )
   }
 
-  // Otherwise, render the 100% clean, professional TV Display (Lobby Dashboard)
+  // Otherwise, render the clean TV Display (Lobby Dashboard)
   return (
-    <div className="w-screen h-screen flex flex-col overflow-hidden bg-[#02275A] text-slate-800 antialiased font-sans select-none">
-      {/* Pristine University Header (No admin buttons visible on TV) */}
-      <Header connectedClients={connectedClients} isTvMode={true} />
-
-      {/* 3-Column TV Signage Mockup Body */}
-      <div className="flex-1 min-h-0 flex flex-col md:flex-row bg-[#F3F8FC] overflow-hidden">
-        {/* Left Column: Event Announcements with Autonomous Autoscroll for TV */}
-        <div className="w-full md:w-[24%] lg:w-[22%] h-full flex-shrink-0">
-          <EventAnnouncements events={state.events} isTvMode={true} />
-        </div>
-
-        {/* Center Column: Large Rounded TV Display Screen */}
-        <div className="flex-1 min-w-0 h-full">
-          <CenterDisplay
-            slides={state.slides}
-            activeSlideIndex={state.activeSlideIndex}
-            isPaused={state.isCarouselPaused}
-            urgentAlert={state.urgentAlert}
-            onSlideChange={(index) => engine.setActiveSlide(index)}
-            onTogglePause={(paused) => engine.toggleCarouselPause(paused)}
-            onDismissAlert={() => engine.setUrgentAlert(null)}
-          />
-        </div>
-
-        {/* Right Column: Clock, Lab 126 & 127 Live Hours & Status (Clean TV Mode) */}
-        <div className="w-full md:w-[24%] lg:w-[22%] h-full flex-shrink-0">
-          <RightPanel labs={state.labs} events={state.events} isTvMode={true} />
-        </div>
-      </div>
+    <div className="w-screen h-screen overflow-hidden">
+      <TvScreen
+        state={state}
+        connectedClients={connectedClients}
+        onSlideChange={(index) => engine.setActiveSlide(index)}
+        onTogglePause={(paused) => engine.toggleCarouselPause(paused)}
+        onDismissAlert={() => engine.setUrgentAlert(null)}
+      />
 
       {/* Discrete subtle live sync toast if a remote admin changes a room status */}
       {toastMessage && (

@@ -53,6 +53,21 @@ const MONTHS = [
 
 const DAY_ABBRS: WeekDay[] = ["Mon", "Tue", "Wed", "Thu", "Fri"]
 
+// Stable badge color per course name, so each course always looks the same.
+const COURSE_BADGE_CLASSES = [
+  "bg-blue-100 text-[#02275A] border border-blue-200",
+  "bg-purple-100 text-purple-700 border border-purple-200",
+  "bg-emerald-100 text-emerald-800 border border-emerald-200",
+  "bg-amber-100 text-amber-800 border border-amber-200",
+  "bg-rose-100 text-rose-700 border border-rose-200",
+]
+
+function courseBadgeClass(course: string): string {
+  let hash = 0
+  for (const ch of course) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0
+  return COURSE_BADGE_CLASSES[hash % COURSE_BADGE_CLASSES.length]
+}
+
 export default function RightPanel({
   labs,
   isTvMode = true,
@@ -516,10 +531,6 @@ export default function RightPanel({
                     }
 
                     return shifts.map((shift) => {
-                      const isIntro =
-                        shift.course.toLowerCase().includes("intro") ||
-                        shift.course.includes("151") ||
-                        shift.course.includes("152")
                       return (
                         <div
                           key={shift.id}
@@ -530,13 +541,9 @@ export default function RightPanel({
                               {shift.tutorName}
                             </span>
                             <span
-                              className={`text-[8px] font-bold px-1.5 py-0.5 rounded tracking-wider flex-shrink-0 ${
-                                isIntro
-                                  ? "bg-blue-100 text-[#02275A] border border-blue-200"
-                                  : "bg-purple-100 text-purple-700 border border-purple-200"
-                              }`}
+                              className={`text-[8px] font-bold px-1.5 py-0.5 rounded tracking-wider flex-shrink-0 truncate max-w-[45%] ${courseBadgeClass(shift.course)}`}
                             >
-                              {isIntro ? "151 & 152" : "251"}
+                              {shift.course}
                             </span>
                           </div>
                           <span className="text-[#02275A] font-bold text-[9px] sm:text-[10px] font-mono flex-shrink-0 ml-1.5">

@@ -6,37 +6,19 @@ import {
   Users,
   FileText,
   UploadCloud,
-  Check,
   X,
   Trash2,
   Download,
   Search,
-  Filter,
   CheckCircle2,
   AlertTriangle,
-  Info,
-  Clock,
   Sparkles,
   Lock,
   Edit2,
-  RefreshCw,
-  Database,
-  Server,
-  ExternalLink,
-  Copy,
-  CheckCircle,
-  Terminal,
-  Plug,
 } from "lucide-react"
 import {
   getUserDatabase,
 } from "../services/userDatabase"
-import {
-  getDatabaseConnection,
-  type DatabaseConnectionConfig,
-  type ConnectionStatus,
-} from "../services/dbConnection"
-import schemaSql from "../../supabase/migrations/0001_init.sql?raw"
 import type {
   SignageUser,
   UserRole,
@@ -62,19 +44,11 @@ export default function AdminPortalModal({
   onClose,
   onUserChanged,
 }: AdminPortalModalProps) {
-  const [activeTab, setActiveTab] = useState<"users" | "logs" | "uploads" | "database">("users")
+  const [activeTab, setActiveTab] = useState<"users" | "logs" | "uploads">("users")
   const [users, setUsers] = useState<SignageUser[]>([])
   const [logs, setLogs] = useState<ActionLog[]>([])
   const [uploads, setUploads] = useState<UploadRecord[]>([])
   const [stats, setStats] = useState<DatabaseStats | null>(null)
-
-  // Database Connection State
-  const dbConn = getDatabaseConnection()
-  const dbConfig: DatabaseConnectionConfig = dbConn.getConfig()
-  const [dbStatus, setDbStatus] = useState<ConnectionStatus>(() => dbConn.getStatus())
-  const [isTestingDb, setIsTestingDb] = useState(false)
-  const [dbTestResult, setDbTestResult] = useState<{ success: boolean; message: string; latencyMs?: number } | null>(null)
-  const [copiedSql, setCopiedSql] = useState(false)
 
   // User creation form state
   const [showCreateUser, setShowCreateUser] = useState(false)
@@ -127,37 +101,11 @@ export default function AdminPortalModal({
       const unsub = db.subscribe(() => {
         reloadData()
       })
-      const unsubDb = dbConn.subscribeStatus((st) => setDbStatus(st))
       return () => {
         unsub()
-        unsubDb()
       }
     }
-  }, [isOpen, logSearch, logCategory, uploadSearch, dbConn])
-
-  const handleTestConnection = async () => {
-    setIsTestingDb(true)
-    setDbTestResult(null)
-    const res = await dbConn.testConnection()
-    setDbTestResult(res)
-    setIsTestingDb(false)
-  }
-
-  const handleCopySql = () => {
-    navigator.clipboard.writeText(schemaSql)
-    setCopiedSql(true)
-    setTimeout(() => setCopiedSql(false), 2500)
-  }
-
-  const handleDownloadSql = () => {
-    const blob = new Blob([schemaSql], { type: "text/plain" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = "0001_init.sql"
-    a.click()
-    URL.revokeObjectURL(url)
-  }
+  }, [isOpen, logSearch, logCategory, uploadSearch])
 
   // Update permissions checkboxes when role changes in create user form
   const handleRoleChange = (role: UserRole) => {
@@ -341,28 +289,6 @@ export default function AdminPortalModal({
             >
               <UploadCloud className="w-4 h-4 text-emerald-400" />
               <span>Uploads ({uploads.length})</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab("database")}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
-                activeTab === "database"
-                  ? "bg-[#02275A] text-white shadow-md border border-sky-400/30"
-                  : "bg-slate-800/80 hover:bg-slate-800 text-slate-400 hover:text-white"
-              }`}
-            >
-              <Database className="w-4 h-4 text-purple-400" />
-              <span>Database & SQL</span>
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  dbStatus === "connected"
-                    ? "bg-emerald-400"
-                    : dbStatus === "connecting"
-                      ? "bg-amber-400 animate-pulse"
-                      : "bg-slate-500"
-                }`}
-                title={`Status: ${dbStatus}`}
-              />
             </button>
           </div>
 
@@ -910,205 +836,6 @@ export default function AdminPortalModal({
                     </div>
                   </div>
                 ))}
-              </div>
-            </div>
-          )}
-
-          {/* TAB 4: DATABASE CONNECTION & SQL SCHEMAS */}
-          {activeTab === "database" && (
-            <div className="space-y-6">
-              {/* Connection Status Card */}
-              <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div className="flex items-center gap-3.5">
-                  <div className="w-12 h-12 rounded-2xl bg-[#02275A] border border-sky-400/30 flex items-center justify-center flex-shrink-0 shadow-lg">
-                    <Database className="w-6 h-6 text-sky-300" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-sm sm:text-base font-black text-white">
-                        Database Connection
-                      </h3>
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 ${
-                          dbStatus === "connected"
-                            ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                            : dbStatus === "connecting"
-                              ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                              : "bg-slate-800 text-slate-400 border border-slate-700"
-                        }`}
-                      >
-                        <span
-                          className={`w-1.5 h-1.5 rounded-full ${
-                            dbStatus === "connected"
-                              ? "bg-emerald-400"
-                              : dbStatus === "connecting"
-                                ? "bg-amber-400 animate-ping"
-                                : "bg-slate-500"
-                          }`}
-                        />
-                        {dbStatus === "connected"
-                          ? "Connected"
-                          : dbStatus === "connecting"
-                            ? "Connecting..."
-                            : dbStatus === "local_fallback"
-                              ? "Local Fallback (This Browser Only)"
-                              : "Disconnected"}
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      {dbConfig.url ? (
-                        <span className="font-mono text-sky-300 truncate block max-w-md">
-                          Supabase: {dbConfig.url}
-                        </span>
-                      ) : (
-                        "Supabase env vars are not set for this build, so data stays in this browser only."
-                      )}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleTestConnection}
-                    disabled={isTestingDb}
-                    className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold flex items-center gap-2 border border-slate-700 transition-all cursor-pointer disabled:opacity-50"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isTestingDb ? "animate-spin text-sky-400" : ""}`} />
-                    <span>{isTestingDb ? "Testing..." : "Test Ping"}</span>
-                  </button>
-                  <button
-                    onClick={handleDownloadSql}
-                    className="px-4 py-2 rounded-xl bg-[#02275A] hover:bg-[#03367d] text-white text-xs font-bold flex items-center gap-2 border border-sky-400/30 shadow-md transition-all cursor-pointer"
-                  >
-                    <Download className="w-3.5 h-3.5 text-sky-300" />
-                    <span>Download 0001_init.sql</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Test Result Feedback */}
-              {dbTestResult && (
-                <div
-                  className={`p-3.5 rounded-xl border text-xs flex items-center justify-between gap-3 animate-fade-in ${
-                    dbTestResult.success
-                      ? "bg-emerald-950/80 border-emerald-500/40 text-emerald-200"
-                      : "bg-amber-950/80 border-amber-500/40 text-amber-200"
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    {dbTestResult.success ? (
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                    ) : (
-                      <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0" />
-                    )}
-                    <span>{dbTestResult.message}</span>
-                  </div>
-                  {dbTestResult.latencyMs !== undefined && (
-                    <span className="text-[11px] font-mono text-emerald-400 font-bold">
-                      {dbTestResult.latencyMs}ms
-                    </span>
-                  )}
-                </div>
-              )}
-
-              {/* Connection Configuration (read-only; set via Vercel env vars) */}
-              <div className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
-                  <div className="flex items-center gap-2">
-                    <Plug className="w-4 h-4 text-sky-400" />
-                    <h4 className="text-xs font-black text-white uppercase tracking-wider">
-                      Database Connection Parameters
-                    </h4>
-                  </div>
-                  <span className="text-[10px] text-slate-500 font-mono">
-                    {dbConfig.type === "supabase" ? "Supabase" : "Local Cache"}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                  <div className="space-y-1.5 md:col-span-2">
-                    <span className="font-bold text-slate-300 block">Project URL</span>
-                    <span className="block w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono truncate">
-                      {dbConfig.url || "Not configured"}
-                    </span>
-                  </div>
-                </div>
-                <p className="text-[11px] text-slate-500">
-                  The project URL and anon key are injected at build time from the Vercel
-                  environment variables (see README). Server secrets such as the service role key
-                  are only used by the <span className="font-mono">/api/admin-users</span> function
-                  and are never sent to the browser.
-                </p>
-              </div>
-
-              {/* Master SQL Schema Code Box */}
-              <div className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
-                  <div className="flex items-center gap-2">
-                    <Terminal className="w-4 h-4 text-amber-400" />
-                    <h4 className="text-xs font-black text-white uppercase tracking-wider">
-                      Supabase Migration (0001_init.sql)
-                    </h4>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={handleCopySql}
-                      className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-[11px] font-bold flex items-center gap-1.5 transition-all cursor-pointer"
-                    >
-                      {copiedSql ? (
-                        <>
-                          <Check className="w-3.5 h-3.5 text-emerald-400" />
-                          <span className="text-emerald-300">Copied!</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3.5 h-3.5 text-slate-400" />
-                          <span>Copy SQL</span>
-                        </>
-                      )}
-                    </button>
-                    <button
-                      onClick={handleDownloadSql}
-                      className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-[11px] font-bold flex items-center gap-1.5 transition-all cursor-pointer"
-                    >
-                      <Download className="w-3.5 h-3.5 text-slate-400" />
-                      <span>Download .sql</span>
-                    </button>
-                  </div>
-                </div>
-
-                <p className="text-xs text-slate-400">
-                  Run this script once in Supabase → SQL Editor to create the tables, Row Level Security policies, realtime publication and the signage-media storage bucket. It is safe to re-run.
-                </p>
-
-                {/* SQL Code Viewport */}
-                <div className="relative rounded-xl bg-slate-950 border border-slate-800/90 p-4 max-h-80 overflow-y-auto font-mono text-xs text-sky-200/90 leading-relaxed scrollbar-thin">
-                  <pre className="whitespace-pre">{schemaSql}</pre>
-                </div>
-
-                {/* Schema Tables Quick Reference */}
-                <div className="pt-3 border-t border-slate-800 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                  {[
-                    { name: "signage_state", desc: "Labs, events, slides & alerts" },
-                    { name: "profiles", desc: "Staff roles & permissions" },
-                    { name: "uploads", desc: "Uploaded file ledger" },
-                    { name: "action_logs", desc: "Audit action ledger" },
-                    { name: "signage-media", desc: "Storage bucket (50 MB/file)" },
-                  ].map((table) => (
-                    <div
-                      key={table.name}
-                      className="p-2 rounded-lg bg-slate-950 border border-slate-800/80 text-[11px]"
-                    >
-                      <span className="font-mono font-bold text-sky-300 block truncate">
-                        {table.name}
-                      </span>
-                      <span className="text-[10px] text-slate-500 block truncate">
-                        {table.desc}
-                      </span>
-                    </div>
-                  ))}
-                </div>
               </div>
             </div>
           )}

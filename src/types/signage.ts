@@ -83,6 +83,12 @@ export interface SlideItem {
   hasStoredBlob?: boolean
   /** Object path in the Supabase `signage-media` bucket; `url` is its public URL. */
   storagePath?: string
+  /** Framing on the TV (see utils/slideLayout.ts). Focus point in %, zoom 1 = 100%. */
+  focalX?: number
+  focalY?: number
+  zoom?: number
+  background?: "blur" | "dark"
+  showCaption?: boolean
 }
 
 export interface SignageState {
@@ -94,6 +100,8 @@ export interface SignageState {
   slides: SlideItem[]
   activeSlideIndex: number
   isCarouselPaused: boolean
+  /** Courses tutors can be assigned to (managed by admins). Missing = DEFAULT_TUTOR_COURSES. */
+  tutorCourses?: string[]
   urgentAlert: UrgentAlert | null
   lastAction: {
     type: string

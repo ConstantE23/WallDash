@@ -18,6 +18,7 @@ import {
 } from "lucide-react"
 import type { SlideItem, UrgentAlert } from "../types/signage"
 import { INITIAL_SLIDES } from "../data/initialData"
+import { getSlideLayout, getMediaStyle } from "../utils/slideLayout"
 
 /**
  * Slide video that only plays while visible. The next slide's video preloads once
@@ -30,11 +31,13 @@ function SlideVideo({
   isActive,
   shouldPreload,
   className,
+  style,
 }: {
   src: string
   isActive: boolean
   shouldPreload: boolean
   className: string
+  style?: React.CSSProperties
 }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [hasRequested, setHasRequested] = useState(isActive || shouldPreload)
@@ -62,6 +65,7 @@ function SlideVideo({
       loop
       playsInline
       className={className}
+      style={style}
     />
   )
 }
@@ -269,18 +273,21 @@ export default function CenterDisplay({
                         slide.url.startsWith("data:video/")),
                   )
 
-                const isCover = slide.mediaFit ? slide.mediaFit === "cover" : fitMode === "cover"
+                const layout = getSlideLayout(slide, fitMode)
+                const mediaStyle = getMediaStyle(layout)
 
                 return (
                   <div
                     key={slide.id}
-                    className={`absolute inset-0 flex items-center justify-center transition-opacity duration-700 ease-in-out ${
+                    className={`absolute inset-0 flex items-center justify-center overflow-hidden transition-opacity duration-700 ease-in-out ${
+                      layout.background === "dark" ? "bg-black" : ""
+                    } ${
                       idx === activeSlideIndex
                         ? "opacity-100 z-10"
                         : "opacity-0 z-0 pointer-events-none"
                     }`}
                   >
-                    {!isVideo ? (
+                    {!isVideo && layout.background === "blur" ? (
                       <img
                         src={slide.url}
                         alt=""
@@ -297,17 +304,15 @@ export default function CenterDisplay({
                           slides.length > 1 &&
                           idx === (activeSlideIndex + 1) % slides.length
                         }
-                        className={`relative z-10 w-full h-full ${
-                          isCover ? "object-cover" : "object-contain max-h-[85vh]"
-                        } select-none pointer-events-none transition-all duration-300`}
+                        className="relative z-10 w-full h-full select-none pointer-events-none"
+                        style={mediaStyle}
                       />
                     ) : (
                       <img
                         src={slide.url}
                         alt={slide.title}
-                        className={`relative z-10 w-full h-full ${
-                          isCover ? "object-cover" : "object-contain max-h-[85vh]"
-                        } select-none transition-all duration-300`}
+                        className="relative z-10 w-full h-full select-none"
+                        style={mediaStyle}
                       />
                     )}
                   </div>
@@ -332,7 +337,7 @@ export default function CenterDisplay({
               </button>
 
               {/* Slide Caption & Title Overlay at Bottom */}
-              {currentSlide && (
+              {currentSlide && currentSlide.showCaption !== false && (
                 <div className="absolute bottom-0 left-0 right-0 z-20 p-4 sm:p-6 bg-gradient-to-t from-black/90 via-black/60 to-transparent flex flex-col gap-1 text-white">
                   <div className="flex items-center gap-2">
                     <span className="text-[9px] md:text-[10px] font-black uppercase tracking-wider bg-[#02275A] text-white px-2 py-0.5 rounded shadow-sm">
