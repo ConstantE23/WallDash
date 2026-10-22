@@ -1,12 +1,36 @@
 # Hampton University CS Digital Signage — Database Schema Documentation
 
-This document describes the complete database architecture for the **Hampton University Computer Science Division Digital Signage System**. 
+## What the deployed app actually uses (Supabase)
 
-The system operates a modern, dynamic architecture:
-1. **Dynamic Database Connection Layer**: [`src/services/dbConnection.ts`](file:///Users/erickconstant/Downloads/Create%20mockup%20with%20colors/src/services/dbConnection.ts) connects the live frontend to an external database (PostgreSQL, Supabase, Neon, or REST endpoint).
-2. **Relational Backend Master DDL**: [`src/database/schema.sql`](file:///Users/erickconstant/Downloads/Create%20mockup%20with%20colors/src/database/schema.sql) defines 12 production-grade relational tables, foreign key constraints, indexes, triggers, and views.
-3. **TypeScript Type System & Store Descriptors**: [`src/database/schema.ts`](file:///Users/erickconstant/Downloads/Create%20mockup%20with%20colors/src/database/schema.ts) provides typed entity schemas, descriptors, and validators.
-4. **Client-Side Cache**: Powered by IndexedDB (`hampton_cs_user_database_v3` and `hampton_cs_media_store_v1`) with multi-tab `BroadcastChannel` real-time sync. All pre-defined static mock datasets have been removed so all data is driven dynamically from the database.
+The live app runs on **Supabase** with a deliberately small schema, defined in
+[`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql). Run that file once
+in Supabase → SQL Editor (it is safe to re-run).
+
+| Object | Kind | Purpose | Who can read | Who can write |
+|---|---|---|---|---|
+| `signage_state` | table, 1 row (`id = 1`) | Whole `SignageState` as `jsonb`: labs, tutor shifts, class sessions, events, slides, urgent alert, active slide, carousel pause | Everyone (anon screens) | Signed-in staff (`is_staff()`) |
+| `profiles` | table | One row per `auth.users` user: `full_name`, `username`, `role`, `permissions[]`, `status`, … | Own row; admins read all | Admins only |
+| `uploads` | table | Ledger of uploaded media (`storage_path`, `public_url`, size, type, slide id) | Staff | Staff insert/update; admins delete |
+| `action_logs` | table | Audit trail mirroring `ActionLog` | Staff | Staff insert; admins delete |
+| `signage-media` | Storage bucket (public) | Slide photos/videos, 50 MB/file, `image/*`, `video/mp4`, `video/webm`, `video/quicktime` | Everyone | Staff upload/delete |
+
+Key points:
+
+- **Auth** is Supabase Auth (email + password). A trigger (`on_auth_user_created`) creates a
+  `profiles` row for each new user **with no role**, so new accounts can't edit anything until
+  an admin assigns a role. `is_admin()` / `is_staff()` are `security definer` helpers used by
+  the RLS policies.
+- **Realtime**: `signage_state` is in the `supabase_realtime` publication. Every screen
+  subscribes to `postgres_changes` on it; connected screens are tracked with Realtime Presence.
+- **Writes** come only from signed-in staff, debounced ~400 ms. TV displays never write;
+  each screen advances its own carousel locally.
+- **Offline cache**: the last good state is kept in `localStorage`
+  (`hampton_cs_sync_state_v1`) so a screen keeps showing content if the network drops.
+- **Fallback**: with no Supabase env vars (local dev only) the app uses the original
+  IndexedDB/localStorage stores in a single browser.
+
+The rest of this document describes the original 12-table reference design in
+`src/database/schema.sql`. It is kept for reference and is **not** deployed.
 
 ---
 
@@ -197,33 +221,14 @@ The schema includes pre-built views:
 
 ---
 
-## 3. How to Deploy the SQL Schema
+## 3. How to Deploy
 
-### Option A: PostgreSQL / Supabase / Neon
-1. Open your database console (Supabase SQL Editor, Neon Console, or `psql`).
-2. Run the DDL script:
-   ```bash
-   psql -d "postgresql://user:pass@host:5432/dbname" -f src/database/schema.sql
-   ```
-3. Set your connection URL in the Admin Portal under **Database & SQL** or in `.env`:
-   ```env
-   VITE_DATABASE_URL="https://your-project.supabase.co"
-   VITE_SUPABASE_ANON_KEY="your-anon-key"
-   ```
-
-### Option B: SQLite
-The schema uses standard SQL and can be loaded directly:
-```bash
-sqlite3 signage.db < src/database/schema.sql
-```
+Use the Supabase migration described at the top of this document. See `README.md` for the
+full setup (env vars, SQL, first admin).
 
 ---
 
 ## 4. Initial Bootstrap Account
 
-Upon applying `src/database/schema.sql`, the database provisions the master administrator account:
-- **Username:** `admin`
-- **Password:** `admin123`
-- **Staff PIN:** `0000`
-- **Full Name:** `CS Systems Administrator`
-- **Role:** `Super Admin` (All 7 permissions granted)
+No default account or password is seeded anywhere. Create the first admin in Supabase
+Auth and promote it via SQL — see `README.md` → "Create the first admin".
