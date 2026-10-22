@@ -852,6 +852,7 @@ export default function AdminPortalModal({
                             src={up.previewUrl}
                             className="w-full h-full object-cover"
                             muted
+                            preload="metadata"
                           />
                         ) : up.previewUrl ? (
                           <img
