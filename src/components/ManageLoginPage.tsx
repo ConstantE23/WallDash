@@ -1,51 +1,42 @@
-import React, { useState, useEffect } from "react"
+import React, { useState } from "react"
 import {
   Lock,
-  User,
+  Mail,
   KeyRound,
-  ShieldCheck,
   Tv,
   ArrowRight,
   AlertCircle,
   GraduationCap,
   Sparkles,
-  Users,
 } from "lucide-react"
-import {
-  getUserDatabase,
-  INITIAL_USERS,
-} from "../services/userDatabase"
+import { getUserDatabase, LOCAL_MODE_AVAILABLE } from "../services/userDatabase"
+import { isSupabaseConfigured } from "../services/supabaseClient"
 import type { SignageUser } from "../types/signage"
 
 interface ManageLoginPageProps {
   onLoginSuccess: (user: SignageUser) => void
   onNavigateToTv: () => void
+  /** Shown above the form, e.g. after a session expires. */
+  notice?: string | null
 }
 
 export default function ManageLoginPage({
   onLoginSuccess,
   onNavigateToTv,
+  notice,
 }: ManageLoginPageProps) {
-  const [username, setUsername] = useState("")
+  const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
-  const [availableUsers, setAvailableUsers] = useState<SignageUser[]>(INITIAL_USERS)
 
   const db = getUserDatabase()
-
-  useEffect(() => {
-    db.getUsers().then((users) => {
-      if (users && users.length > 0) {
-        setAvailableUsers(users)
-      }
-    })
-  }, [db])
+  const supabaseReady = isSupabaseConfigured()
 
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!username.trim() || !password.trim()) {
-      setErrorMsg("Please enter both username and password or PIN.")
+    if (!email.trim() || !password) {
+      setErrorMsg("Please enter both your email and password.")
       return
     }
 
@@ -53,34 +44,27 @@ export default function ManageLoginPage({
     setErrorMsg(null)
 
     try {
-      const authenticated = await db.verifyCredentials(username, password)
-      if (authenticated) {
-        await db.setActiveUser(authenticated.id)
-        if (typeof window !== "undefined") {
-          sessionStorage.setItem("hampton_auth_user_id", authenticated.id)
-        }
-        onLoginSuccess(authenticated)
-      } else {
-        setErrorMsg("Invalid username or password. Check credentials or select a profile below.")
-      }
+      const authenticated = await db.signIn(email, password)
+      setPassword("")
+      onLoginSuccess(authenticated)
     } catch (err) {
-      setErrorMsg("An error occurred during authentication. Please retry.")
+      setErrorMsg(
+        err instanceof Error
+          ? err.message
+          : "An error occurred during authentication. Please retry.",
+      )
     } finally {
       setIsLoading(false)
     }
   }
 
-  const handleQuickLogin = async (user: SignageUser) => {
+  const handleLocalLogin = async () => {
     setIsLoading(true)
     setErrorMsg(null)
     try {
-      await db.setActiveUser(user.id)
-      if (typeof window !== "undefined") {
-        sessionStorage.setItem("hampton_auth_user_id", user.id)
-      }
-      onLoginSuccess(user)
-    } catch {
-      setErrorMsg("Could not authenticate selected profile.")
+      onLoginSuccess(await db.signInLocal())
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Could not start local mode.")
     } finally {
       setIsLoading(false)
     }
@@ -131,6 +115,22 @@ export default function ManageLoginPage({
             </p>
           </div>
 
+          {notice && !errorMsg && (
+            <div className="p-3 rounded-xl bg-amber-950/60 border border-amber-500/40 text-amber-200 text-xs flex items-center gap-2.5">
+              <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+              <span>{notice}</span>
+            </div>
+          )}
+
+          {!supabaseReady && !LOCAL_MODE_AVAILABLE && (
+            <div className="p-3 rounded-xl bg-red-950/70 border border-red-500/40 text-red-200 text-xs flex items-center gap-2.5">
+              <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
+              <span>
+                Sign-in is unavailable: Supabase is not configured for this deployment.
+              </span>
+            </div>
+          )}
+
           {errorMsg && (
             <div className="p-3 rounded-xl bg-red-950/70 border border-red-500/40 text-red-200 text-xs flex items-center gap-2.5 animate-shake">
               <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
@@ -141,15 +141,15 @@ export default function ManageLoginPage({
           <form onSubmit={handleFormSubmit} className="space-y-4">
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-                Username or Email
+                Email
               </label>
               <div className="relative">
-                <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
-                  type="text"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="e.g. admin"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="e.g. jdoe@hamptonu.edu"
                   autoComplete="username"
                   className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 focus:border-[#02275A] focus:outline-none focus:ring-1 focus:ring-sky-500 text-sm text-white placeholder-slate-500 transition-all font-mono"
                 />
@@ -158,7 +158,7 @@ export default function ManageLoginPage({
 
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-                Password or Staff PIN
+                Password
               </label>
               <div className="relative">
                 <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -166,7 +166,7 @@ export default function ManageLoginPage({
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="e.g. admin123 or PIN 0000"
+                  placeholder="Your account password"
                   autoComplete="current-password"
                   className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 focus:border-[#02275A] focus:outline-none focus:ring-1 focus:ring-sky-500 text-sm text-white placeholder-slate-500 transition-all font-mono"
                 />
@@ -175,7 +175,7 @@ export default function ManageLoginPage({
 
             <button
               type="submit"
-              disabled={isLoading}
+              disabled={isLoading || !supabaseReady}
               className="w-full py-3 px-4 rounded-xl bg-[#02275A] hover:bg-[#03367d] text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-xl shadow-[#02275A]/30 transition-all cursor-pointer active:scale-[0.98] border border-sky-400/30 disabled:opacity-50"
             >
               {isLoading ? (
@@ -189,55 +189,25 @@ export default function ManageLoginPage({
             </button>
           </form>
 
-          {/* Quick Demo Staff Logins */}
-          <div className="border-t border-slate-800/80 pt-5 space-y-3">
-            <div className="flex items-center justify-between">
+          {/* Local dev fallback (only when Supabase isn't configured in a dev build) */}
+          {LOCAL_MODE_AVAILABLE && (
+            <div className="border-t border-slate-800/80 pt-5 space-y-3">
               <span className="text-[11px] font-extrabold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                <span>Quick Login as Staff Profile:</span>
+                <span>Supabase not configured · Local dev mode</span>
               </span>
-              <span className="text-[10px] text-slate-500 font-mono">1-Click Access</span>
+              <button
+                onClick={handleLocalLogin}
+                disabled={isLoading}
+                className="w-full p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800/80 border border-slate-800/80 hover:border-slate-700 flex items-center justify-between text-left transition-all cursor-pointer group disabled:opacity-50"
+              >
+                <span className="text-xs font-bold text-white group-hover:text-sky-300 transition-colors">
+                  Continue as local administrator (this browser only)
+                </span>
+                <ArrowRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-white group-hover:translate-x-0.5 transition-all flex-shrink-0 ml-2" />
+              </button>
             </div>
-
-            <div className="grid grid-cols-1 gap-2">
-              {availableUsers.slice(0, 4).map((u) => {
-                const isAdmin = db.isAdmin(u)
-                return (
-                  <button
-                    key={u.id}
-                    onClick={() => handleQuickLogin(u)}
-                    className="p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800/80 border border-slate-800/80 hover:border-slate-700 flex items-center justify-between text-left transition-all cursor-pointer group"
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div
-                        className="w-7 h-7 rounded-lg flex items-center justify-center text-[11px] font-black text-white flex-shrink-0 shadow-sm"
-                        style={{ backgroundColor: u.avatarColor || "#02275A" }}
-                      >
-                        {u.fullName.charAt(0)}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-bold text-white truncate group-hover:text-sky-300 transition-colors">
-                            {u.fullName}
-                          </span>
-                          {isAdmin && (
-                            <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                              Admin
-                            </span>
-                          )}
-                        </div>
-                        <span className="text-[10px] text-slate-400 block truncate font-mono">
-                          {u.role} · @{u.username}
-                        </span>
-                      </div>
-                    </div>
-
-                    <ArrowRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-white group-hover:translate-x-0.5 transition-all flex-shrink-0 ml-2" />
-                  </button>
-                )
-              })}
-            </div>
-          </div>
+          )}
         </div>
       </main>
 

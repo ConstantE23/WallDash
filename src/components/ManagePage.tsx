@@ -52,7 +52,7 @@ import LabHoursIntervalPicker from "./LabHoursIntervalPicker"
 import { getEffectiveLabStatus } from "../utils/labHours"
 import LabClassScheduleManager from "./LabClassScheduleManager"
 import { getUserDatabase } from "../services/userDatabase"
-import { saveMedia } from "../services/mediaStorage"
+import { uploadSlideMedia, validateMediaFile } from "../services/mediaStorage"
 import ManageLoginPage from "./ManageLoginPage"
 import AdminPortalModal from "./AdminPortalModal"
 
@@ -119,45 +119,50 @@ export default function ManagePage({
   const [authenticatedUser, setAuthenticatedUser] = useState<SignageUser | null>(null)
   const [isAuthChecking, setIsAuthChecking] = useState(true)
   const [showAdminPortal, setShowAdminPortal] = useState(false)
+  const [loginNotice, setLoginNotice] = useState<string | null>(null)
+  const isSigningOutRef = useRef(false)
 
   useEffect(() => {
-    // Check if session exists in sessionStorage
-    const checkAuth = async () => {
-      try {
-        const storedId =
-          typeof window !== "undefined"
-            ? sessionStorage.getItem("hampton_auth_user_id")
-            : null
-        if (storedId) {
-          const user = await db.getUser(storedId)
-          if (user && user.status === "active") {
-            setAuthenticatedUser(user)
-            await db.setActiveUser(user.id)
-          }
-        }
-      } catch {
-        // ignore
-      } finally {
-        setIsAuthChecking(false)
+    // Restore an existing Supabase (or local dev) session
+    let cancelled = false
+    db.restoreSession()
+      .then((user) => {
+        if (!cancelled && user) setAuthenticatedUser(user)
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setIsAuthChecking(false)
+      })
+
+    // Expired or revoked sessions send staff back to the login view
+    const unsubSession = db.onSessionChange((user) => {
+      if (user) {
+        setAuthenticatedUser(user)
+        return
       }
+      setAuthenticatedUser((prev) => {
+        if (prev && !isSigningOutRef.current) {
+          setLoginNotice("Your session has expired. Please sign in again.")
+        }
+        return null
+      })
+    })
+
+    return () => {
+      cancelled = true
+      unsubSession()
     }
-    checkAuth()
   }, [db])
 
   const handleSignOut = async () => {
-    if (typeof window !== "undefined") {
-      sessionStorage.removeItem("hampton_auth_user_id")
+    isSigningOutRef.current = true
+    try {
+      await db.signOut()
+    } finally {
+      isSigningOutRef.current = false
+      setLoginNotice(null)
+      setAuthenticatedUser(null)
     }
-    if (authenticatedUser) {
-      await db.logAction({
-        actionType: "USER_LOGOUT",
-        category: "auth",
-        summary: `${authenticatedUser.fullName} signed out of the Staff Portal`,
-        severity: "info",
-        customUser: authenticatedUser,
-      })
-    }
-    setAuthenticatedUser(null)
   }
 
   // Alert form state
@@ -205,6 +210,10 @@ export default function ManagePage({
   const [mediaCaption, setMediaCaption] = useState("")
   const [mediaDuration, setMediaDuration] = useState<number>(8)
   const [isUploadingMedia, setIsUploadingMedia] = useState(false)
+  const [mediaUploadProgress, setMediaUploadProgress] = useState<number | null>(
+    null,
+  )
+  const [mediaUploadError, setMediaUploadError] = useState<string | null>(null)
   const [mediaUploadSuccess, setMediaUploadSuccess] = useState<string | null>(
     null,
   )
@@ -246,6 +255,15 @@ export default function ManagePage({
   const lab127 = state.labs[127]
 
   const handleSelectMediaFile = (file: File) => {
+    // Reject oversize / unsupported files before anything is uploaded
+    const validationError = validateMediaFile(file)
+    if (validationError) {
+      setMediaUploadError(validationError)
+      setMediaFile(null)
+      setMediaPreviewUrl(null)
+      return
+    }
+    setMediaUploadError(null)
     setMediaFile(file)
     const isVid =
       file.type.startsWith("video/") ||
@@ -281,41 +299,54 @@ export default function ManagePage({
       return
     }
 
+    const validationError = validateMediaFile(mediaFile)
+    if (validationError) {
+      setMediaUploadError(validationError)
+      return
+    }
+
     setIsUploadingMedia(true)
+    setMediaUploadError(null)
+    setMediaUploadProgress(0)
     try {
-      const slideId = `slide-${Date.now()}`
+      const slideId = `slide-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
       const userDb = getUserDatabase()
 
-      // 1. First feed to the database and persistent storage!
-      const persistentUrl = await saveMedia(slideId, mediaFile, mediaFile.name)
+      // 1. Upload the file to Supabase Storage (or IndexedDB in local fallback)
+      const uploaded = await uploadSlideMedia(
+        slideId,
+        mediaFile,
+        mediaFile.name,
+        (pct) => setMediaUploadProgress(pct),
+      )
 
       await userDb.recordUpload({
         fileName: mediaFile.name,
         fileSize: mediaFile.size,
         fileType: mediaFile.type,
         mediaType,
-        storageKey: slideId,
-        previewUrl: persistentUrl,
+        storageKey: uploaded.storagePath || slideId,
+        previewUrl: uploaded.url,
         associatedSlideId: slideId,
         tags: [mediaCategory.toLowerCase(), "slide-upload"],
         customUser: authenticatedUser || undefined,
       })
 
-      // 2. Only after database successfully records the upload, put it on the screen
-      await engine.addSlide(
-        {
-          title: mediaTitle.trim(),
-          subtitle: mediaSubtitle.trim() || "Hampton University CS",
-          category: mediaCategory.trim() || "Media Spotlight",
-          caption: mediaCaption.trim(),
-          url: persistentUrl,
-          mediaType,
-          durationSeconds:
-            Number(mediaDuration) || (mediaType === "video" ? 15 : 8),
-          fileName: mediaFile.name,
-        },
-        mediaFile,
-      )
+      // 2. Only after the upload is recorded, put it on the screens
+      await engine.addSlide({
+        id: slideId,
+        title: mediaTitle.trim(),
+        subtitle: mediaSubtitle.trim() || "Hampton University CS",
+        category: mediaCategory.trim() || "Media Spotlight",
+        caption: mediaCaption.trim(),
+        url: uploaded.url,
+        storagePath: uploaded.storagePath,
+        hasStoredBlob: uploaded.hasStoredBlob,
+        mediaType,
+        durationSeconds:
+          Number(mediaDuration) || (mediaType === "video" ? 15 : 8),
+        fileName: mediaFile.name,
+      })
 
       setMediaUploadSuccess(
         `Fed to database & published ${
@@ -331,9 +362,14 @@ export default function ManagePage({
       setTimeout(() => setMediaUploadSuccess(null), 5000)
     } catch (err) {
       console.error("Upload error:", err)
-      alert("Failed to save media upload to database before publishing.")
+      setMediaUploadError(
+        err instanceof Error
+          ? err.message
+          : "Failed to upload media. Nothing was published.",
+      )
     } finally {
       setIsUploadingMedia(false)
+      setMediaUploadProgress(null)
     }
   }
 
@@ -591,12 +627,11 @@ export default function ManagePage({
     return (
       <ManageLoginPage
         onLoginSuccess={(user) => {
+          setLoginNotice(null)
           setAuthenticatedUser(user)
-          if (typeof window !== "undefined") {
-            sessionStorage.setItem("hampton_auth_user_id", user.id)
-          }
         }}
         onNavigateToTv={onNavigateToTv}
+        notice={loginNotice}
       />
     )
   }
@@ -625,7 +660,7 @@ export default function ManagePage({
                 )}
               </div>
               <span className="text-[10px] text-sky-200/90 block font-mono leading-tight">
-                {authenticatedUser.role} · @{authenticatedUser.username}
+                {authenticatedUser.role ?? "Pending approval"} · @{authenticatedUser.username}
               </span>
             </div>
           </div>
@@ -1315,19 +1350,36 @@ export default function ManagePage({
                     Upload New Media Slide (Photos & Videos)
                   </span>
                   <span className="text-[11px] text-slate-400">
-                    Supports JPG, PNG, WEBP, GIF, MP4, WebM, MOV
+                    Supports JPG, PNG, WEBP, GIF, MP4, WebM, MOV · max 50 MB
                   </span>
                 </div>
+
+                {mediaUploadError && (
+                  <div className="p-3 rounded-xl bg-red-950/70 border border-red-500/40 text-red-200 text-xs flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />
+                      <span>{mediaUploadError}</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setMediaUploadError(null)}
+                      className="text-white/60 hover:text-white"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
 
                 {/* Dropzone / File Picker */}
                 <div>
                   <input
                     ref={mediaFileInputRef}
                     type="file"
-                    accept="image/*,video/*"
+                    accept="image/*,video/mp4,video/webm,video/quicktime"
                     onChange={(e) => {
                       const file = e.target.files?.[0]
                       if (file) handleSelectMediaFile(file)
+                      e.target.value = ""
                     }}
                     className="hidden"
                   />
@@ -1506,7 +1558,9 @@ export default function ManagePage({
                       setShowAddMedia(false)
                       setMediaFile(null)
                       setMediaPreviewUrl(null)
+                      setMediaUploadError(null)
                     }}
+                    disabled={isUploadingMedia}
                     className="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold cursor-pointer"
                   >
                     Cancel
@@ -1521,7 +1575,9 @@ export default function ManagePage({
                     <Upload className="w-3.5 h-3.5" />
                     <span>
                       {isUploadingMedia
-                        ? "Uploading..."
+                        ? mediaUploadProgress !== null && mediaUploadProgress < 100
+                          ? `Uploading... ${mediaUploadProgress}%`
+                          : "Publishing..."
                         : "Publish to Live TV Slideshow"}
                     </span>
                   </button>
@@ -1653,7 +1709,7 @@ export default function ManagePage({
 
                           <button
                             type="button"
-                            onClick={() => engine.setActiveSlide(idx)}
+                            onClick={() => engine.setActiveSlide(idx, true)}
                             title="Show this slide on the TV right now"
                             className={`px-2.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-all ${
                               isCurrent

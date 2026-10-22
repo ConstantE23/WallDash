@@ -36,7 +36,7 @@ import {
   type DatabaseConnectionConfig,
   type ConnectionStatus,
 } from "../services/dbConnection"
-import schemaSql from "../database/schema.sql?raw"
+import schemaSql from "../../supabase/migrations/0001_init.sql?raw"
 import type {
   SignageUser,
   UserRole,
@@ -47,6 +47,7 @@ import type {
   ActionLogCategory,
 } from "../types/signage"
 import { ALL_PERMISSIONS } from "../types/signage"
+import { getSyncEngine } from "../services/syncEngine"
 
 interface AdminPortalModalProps {
   currentUser: SignageUser
@@ -69,7 +70,7 @@ export default function AdminPortalModal({
 
   // Database Connection State
   const dbConn = getDatabaseConnection()
-  const [dbConfig, setDbConfig] = useState<DatabaseConnectionConfig>(() => dbConn.getConfig())
+  const dbConfig: DatabaseConnectionConfig = dbConn.getConfig()
   const [dbStatus, setDbStatus] = useState<ConnectionStatus>(() => dbConn.getStatus())
   const [isTestingDb, setIsTestingDb] = useState(false)
   const [dbTestResult, setDbTestResult] = useState<{ success: boolean; message: string; latencyMs?: number } | null>(null)
@@ -82,7 +83,6 @@ export default function AdminPortalModal({
   const [newEmail, setNewEmail] = useState("")
   const [newRole, setNewRole] = useState<UserRole>("Faculty/Staff")
   const [newPassword, setNewPassword] = useState("")
-  const [newPinCode, setNewPinCode] = useState("")
   const [newPermissions, setNewPermissions] = useState<UserPermission[]>(() =>
     getUserDatabase().getDefaultPermissionsForRole("Faculty/Staff"),
   )
@@ -92,6 +92,8 @@ export default function AdminPortalModal({
   // Edit permissions state
   const [editingUser, setEditingUser] = useState<SignageUser | null>(null)
   const [editPermissions, setEditPermissions] = useState<UserPermission[]>([])
+  const [editRole, setEditRole] = useState<UserRole | "">("")
+  const [adminError, setAdminError] = useState<string | null>(null)
 
   // Logs filters
   const [logSearch, setLogSearch] = useState("")
@@ -103,16 +105,20 @@ export default function AdminPortalModal({
   const db = getUserDatabase()
 
   const reloadData = async () => {
-    const [uList, lList, upList, sData] = await Promise.all([
-      db.getUsers(),
-      db.getLogs({ search: logSearch, category: logCategory }),
-      db.getUploads({ search: uploadSearch }),
-      db.getStats(),
-    ])
-    setUsers(uList)
-    setLogs(lList)
-    setUploads(upList)
-    setStats(sData)
+    try {
+      const [uList, lList, upList, sData] = await Promise.all([
+        db.getUsers(),
+        db.getLogs({ search: logSearch, category: logCategory }),
+        db.getUploads({ search: uploadSearch }),
+        db.getStats(),
+      ])
+      setUsers(uList)
+      setLogs(lList)
+      setUploads(upList)
+      setStats(sData)
+    } catch (err) {
+      setAdminError(err instanceof Error ? err.message : "Could not load admin data.")
+    }
   }
 
   useEffect(() => {
@@ -137,11 +143,6 @@ export default function AdminPortalModal({
     setIsTestingDb(false)
   }
 
-  const handleSaveDbConfig = () => {
-    dbConn.setConfig(dbConfig)
-    setDbTestResult({ success: true, message: "Connection configuration saved." })
-  }
-
   const handleCopySql = () => {
     navigator.clipboard.writeText(schemaSql)
     setCopiedSql(true)
@@ -153,7 +154,7 @@ export default function AdminPortalModal({
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url
-    a.download = "schema.sql"
+    a.download = "0001_init.sql"
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -182,6 +183,10 @@ export default function AdminPortalModal({
       setCreateError("Please fill in full name, username, and email.")
       return
     }
+    if (newPassword.trim().length < 8) {
+      setCreateError("Set an initial password of at least 8 characters.")
+      return
+    }
 
     try {
       setCreateError(null)
@@ -191,8 +196,7 @@ export default function AdminPortalModal({
         email: newEmail.trim(),
         role: newRole,
         permissions: newPermissions,
-        password: newPassword.trim() || "changeme123",
-        pinCode: newPinCode.trim() || "1234",
+        password: newPassword.trim(),
       })
 
       setCreateSuccess(`Created user "${newFullName}" with ${newPermissions.length} permissions!`)
@@ -200,7 +204,6 @@ export default function AdminPortalModal({
       setNewUsername("")
       setNewEmail("")
       setNewPassword("")
-      setNewPinCode("")
       setShowCreateUser(false)
       await reloadData()
       if (onUserChanged) onUserChanged()
@@ -213,12 +216,19 @@ export default function AdminPortalModal({
   const handleSavePermissions = async () => {
     if (!editingUser) return
     try {
-      await db.updatePermissions(editingUser.id, editPermissions)
+      if (editRole && editRole !== editingUser.role) {
+        await db.updateUser(editingUser.id, {
+          role: editRole,
+          permissions: editPermissions,
+        })
+      } else {
+        await db.updatePermissions(editingUser.id, editPermissions)
+      }
       setEditingUser(null)
       await reloadData()
       if (onUserChanged) onUserChanged()
     } catch (err) {
-      alert("Could not update permissions.")
+      alert(err instanceof Error ? err.message : "Could not update permissions.")
     }
   }
 
@@ -228,9 +238,13 @@ export default function AdminPortalModal({
       return
     }
     if (confirm(`Are you sure you want to delete user "${user.fullName}"?`)) {
-      await db.deleteUser(user.id)
-      await reloadData()
-      if (onUserChanged) onUserChanged()
+      try {
+        await db.deleteUser(user.id)
+        await reloadData()
+        if (onUserChanged) onUserChanged()
+      } catch (err) {
+        alert(err instanceof Error ? err.message : "Could not delete user.")
+      }
     }
   }
 
@@ -247,8 +261,12 @@ export default function AdminPortalModal({
 
   const handleClearLogs = async () => {
     if (confirm("Are you sure you want to clear all action logs from the database?")) {
-      await db.clearLogs()
-      await reloadData()
+      try {
+        await db.clearLogs()
+        await reloadData()
+      } catch (err) {
+        alert(err instanceof Error ? err.message : "Could not clear logs.")
+      }
     }
   }
 
@@ -273,7 +291,7 @@ export default function AdminPortalModal({
                 </span>
               </div>
               <p className="text-xs text-sky-200/80">
-                Logged in as <strong className="text-white">{currentUser.fullName}</strong> ({currentUser.role})
+                Logged in as <strong className="text-white">{currentUser.fullName}</strong> ({currentUser.role ?? "Pending approval"})
               </p>
             </div>
           </div>
@@ -367,6 +385,20 @@ export default function AdminPortalModal({
 
         {/* Modal Scrollable Body */}
         <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-6">
+          {adminError && (
+            <div className="p-3 rounded-xl bg-red-950/70 border border-red-500/40 text-red-200 text-xs flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />
+                <span>{adminError}</span>
+              </span>
+              <button
+                onClick={() => setAdminError(null)}
+                className="text-white/60 hover:text-white cursor-pointer"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
 
           {/* ======================================================== */}
           {/* TAB 1: USERS & PERMISSIONS                                */}
@@ -476,27 +508,16 @@ export default function AdminPortalModal({
 
                       <div>
                         <label className="text-[11px] font-bold text-slate-300 uppercase tracking-wider block mb-1">
-                          Initial Password
+                          Initial Password *
                         </label>
                         <input
-                          type="text"
+                          type="password"
                           value={newPassword}
                           onChange={(e) => setNewPassword(e.target.value)}
-                          placeholder="Defaults to changeme123"
-                          className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 focus:border-[#02275A] text-xs text-white font-mono"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="text-[11px] font-bold text-slate-300 uppercase tracking-wider block mb-1">
-                          Quick Staff PIN (4 digits)
-                        </label>
-                        <input
-                          type="text"
-                          value={newPinCode}
-                          onChange={(e) => setNewPinCode(e.target.value)}
-                          placeholder="Defaults to 1234"
-                          maxLength={6}
+                          placeholder="At least 8 characters"
+                          minLength={8}
+                          required
+                          autoComplete="new-password"
                           className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 focus:border-[#02275A] text-xs text-white font-mono"
                         />
                       </div>
@@ -617,7 +638,7 @@ export default function AdminPortalModal({
                               )}
                             </div>
                             <span className="text-xs text-sky-300 font-semibold block truncate">
-                              {u.role} · @{u.username}
+                              {u.role ?? "Pending approval"} · @{u.username}
                             </span>
                             <span className="text-[10px] text-slate-500 block truncate font-mono">
                               {u.email}
@@ -629,6 +650,7 @@ export default function AdminPortalModal({
                           <button
                             onClick={() => {
                               setEditingUser(u)
+                              setEditRole(u.role ?? "")
                               setEditPermissions([...(u.permissions || [])])
                             }}
                             title="Edit Permissions"
@@ -859,13 +881,28 @@ export default function AdminPortalModal({
                       </span>
                       <button
                         onClick={async () => {
-                          if (confirm(`Delete upload record "${up.fileName}"?`)) {
-                            await db.deleteUpload(up.id)
+                          if (
+                            confirm(
+                              `Delete "${up.fileName}"? This removes the file from storage and from the TV rotation.`,
+                            )
+                          ) {
+                            try {
+                              const engine = getSyncEngine()
+                              if (
+                                up.associatedSlideId &&
+                                engine.getState().slides.some((s) => s.id === up.associatedSlideId)
+                              ) {
+                                await engine.removeSlide(up.associatedSlideId)
+                              }
+                              await db.deleteUpload(up.id)
+                            } catch (err) {
+                              alert(err instanceof Error ? err.message : "Could not delete upload.")
+                            }
                             await reloadData()
                           }
                         }}
                         className="text-red-400 hover:text-red-300 text-xs p-1 rounded hover:bg-red-950/30 cursor-pointer"
-                        title="Delete upload record"
+                        title="Delete upload and file"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -912,18 +949,18 @@ export default function AdminPortalModal({
                           ? "Connected"
                           : dbStatus === "connecting"
                             ? "Connecting..."
-                            : dbConfig.url
-                              ? "Disconnected"
-                              : "No URL Set (Local Cache)"}
+                            : dbStatus === "local_fallback"
+                              ? "Local Fallback (This Browser Only)"
+                              : "Disconnected"}
                       </span>
                     </div>
                     <p className="text-xs text-slate-400 mt-0.5">
                       {dbConfig.url ? (
                         <span className="font-mono text-sky-300 truncate block max-w-md">
-                          Endpoint: {dbConfig.url}
+                          Supabase: {dbConfig.url}
                         </span>
                       ) : (
-                        "Operating in dynamic client cache mode. Connect an external PostgreSQL / Supabase endpoint below."
+                        "Supabase env vars are not set for this build, so data stays in this browser only."
                       )}
                     </p>
                   </div>
@@ -943,7 +980,7 @@ export default function AdminPortalModal({
                     className="px-4 py-2 rounded-xl bg-[#02275A] hover:bg-[#03367d] text-white text-xs font-bold flex items-center gap-2 border border-sky-400/30 shadow-md transition-all cursor-pointer"
                   >
                     <Download className="w-3.5 h-3.5 text-sky-300" />
-                    <span>Download schema.sql</span>
+                    <span>Download 0001_init.sql</span>
                   </button>
                 </div>
               </div>
@@ -973,7 +1010,7 @@ export default function AdminPortalModal({
                 </div>
               )}
 
-              {/* Endpoint Connection Config Form */}
+              {/* Connection Configuration (read-only; set via Vercel env vars) */}
               <div className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-4">
                 <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
                   <div className="flex items-center gap-2">
@@ -983,70 +1020,24 @@ export default function AdminPortalModal({
                     </h4>
                   </div>
                   <span className="text-[10px] text-slate-500 font-mono">
-                    Live Backend Target
+                    {dbConfig.type === "supabase" ? "Supabase" : "Local Cache"}
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                   <div className="space-y-1.5 md:col-span-2">
-                    <label className="text-xs font-bold text-slate-300">
-                      Database URL or REST Endpoint
-                    </label>
-                    <input
-                      type="text"
-                      value={dbConfig.url}
-                      onChange={(e) => setDbConfig({ ...dbConfig, url: e.target.value })}
-                      placeholder="e.g. https://your-project.supabase.co or https://api.hamptonu.edu/signage"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white placeholder-slate-500 font-mono focus:border-sky-500 focus:outline-none"
-                    />
-                    <p className="text-[10px] text-slate-500">
-                      Supports direct PostgreSQL REST adapters, Supabase, Neon, or custom Express/Node backend APIs.
-                    </p>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-300">
-                      API Key / Service Token (Optional)
-                    </label>
-                    <input
-                      type="password"
-                      value={dbConfig.apiKey || ""}
-                      onChange={(e) => setDbConfig({ ...dbConfig, apiKey: e.target.value })}
-                      placeholder="e.g. eyJhbGciOiJIUzI1NiIsInR5cCI6..."
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white placeholder-slate-500 font-mono focus:border-sky-500 focus:outline-none"
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-300">
-                      Connection Driver
-                    </label>
-                    <select
-                      value={dbConfig.type}
-                      onChange={(e) =>
-                        setDbConfig({
-                          ...dbConfig,
-                          type: e.target.value as DatabaseConnectionConfig["type"],
-                        })
-                      }
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-mono focus:border-sky-500 focus:outline-none"
-                    >
-                      <option value="rest">REST API / PostgREST (PostgreSQL)</option>
-                      <option value="supabase">Supabase Database Client</option>
-                      <option value="postgres_api">PostgreSQL Direct API</option>
-                      <option value="indexeddb">Local Client Cache (Offline Mode)</option>
-                    </select>
+                    <span className="font-bold text-slate-300 block">Project URL</span>
+                    <span className="block w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono truncate">
+                      {dbConfig.url || "Not configured"}
+                    </span>
                   </div>
                 </div>
-
-                <div className="flex justify-end gap-2 pt-2">
-                  <button
-                    onClick={handleSaveDbConfig}
-                    className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black shadow-lg cursor-pointer transition-all active:scale-95"
-                  >
-                    Save & Apply Connection
-                  </button>
-                </div>
+                <p className="text-[11px] text-slate-500">
+                  The project URL and anon key are injected at build time from the Vercel
+                  environment variables (see README). Server secrets such as the service role key
+                  are only used by the <span className="font-mono">/api/admin-users</span> function
+                  and are never sent to the browser.
+                </p>
               </div>
 
               {/* Master SQL Schema Code Box */}
@@ -1055,7 +1046,7 @@ export default function AdminPortalModal({
                   <div className="flex items-center gap-2">
                     <Terminal className="w-4 h-4 text-amber-400" />
                     <h4 className="text-xs font-black text-white uppercase tracking-wider">
-                      Master SQL Schema (12 Tables & Views)
+                      Supabase Migration (0001_init.sql)
                     </h4>
                   </div>
 
@@ -1087,7 +1078,7 @@ export default function AdminPortalModal({
                 </div>
 
                 <p className="text-xs text-slate-400">
-                  Execute this SQL script directly in your PostgreSQL / Supabase SQL console to provision all tables, foreign keys, indexes, and initial admin bootstrap.
+                  Run this script once in Supabase → SQL Editor to create the tables, Row Level Security policies, realtime publication and the signage-media storage bucket. It is safe to re-run.
                 </p>
 
                 {/* SQL Code Viewport */}
@@ -1098,18 +1089,11 @@ export default function AdminPortalModal({
                 {/* Schema Tables Quick Reference */}
                 <div className="pt-3 border-t border-slate-800 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
                   {[
-                    { name: "users", desc: "Staff & admin accounts" },
-                    { name: "user_permissions", desc: "Granular capabilities" },
-                    { name: "labs", desc: "Lab 126/127 rooms & status" },
-                    { name: "lab_classes", desc: "Class meeting schedules" },
-                    { name: "lab_tutor_shifts", desc: "Tutor shifts & hours" },
-                    { name: "calendar_events", desc: "Campus announcements" },
-                    { name: "signage_slides", desc: "Center TV rotation items" },
-                    { name: "media_blobs", desc: "Binary raw video/photos" },
+                    { name: "signage_state", desc: "Labs, events, slides & alerts" },
+                    { name: "profiles", desc: "Staff roles & permissions" },
                     { name: "uploads", desc: "Uploaded file ledger" },
                     { name: "action_logs", desc: "Audit action ledger" },
-                    { name: "urgent_alerts", desc: "Emergency ticker banners" },
-                    { name: "system_settings", desc: "Dynamic configuration" },
+                    { name: "signage-media", desc: "Storage bucket (50 MB/file)" },
                   ].map((table) => (
                     <div
                       key={table.name}
@@ -1138,7 +1122,7 @@ export default function AdminPortalModal({
                 <div className="flex items-center gap-2">
                   <Shield className="w-5 h-5 text-amber-400" />
                   <h3 className="text-sm font-black text-white">
-                    Edit Permissions for {editingUser.fullName}
+                    Edit Role & Permissions for {editingUser.fullName}
                   </h3>
                 </div>
                 <button
@@ -1147,6 +1131,28 @@ export default function AdminPortalModal({
                 >
                   <X className="w-4 h-4" />
                 </button>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-bold text-slate-300 uppercase tracking-wider block">
+                  Role {editingUser.role === null && "(required to approve this account)"}
+                </label>
+                <select
+                  value={editRole}
+                  onChange={(e) => {
+                    const role = e.target.value as UserRole
+                    setEditRole(role)
+                    if (role) setEditPermissions(db.getDefaultPermissionsForRole(role))
+                  }}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 focus:border-[#02275A] text-xs text-white"
+                >
+                  {editingUser.role === null && <option value="">Pending approval (no access)</option>}
+                  <option value="Super Admin">Super Admin (Full Access)</option>
+                  <option value="Department Chair">Department Chair</option>
+                  <option value="Lab Coordinator">Lab Coordinator (Rooms 126/127)</option>
+                  <option value="Faculty/Staff">Faculty / Staff</option>
+                  <option value="Student Assistant">Student Assistant (ACM Lead)</option>
+                </select>
               </div>
 
               <p className="text-xs text-slate-400">

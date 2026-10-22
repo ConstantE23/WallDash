@@ -2,6 +2,9 @@
 -- Hampton University Department of Computer Science
 -- Digital Signage Master Database Schema
 -- Compatible with: PostgreSQL 14+, Supabase, Neon, AWS RDS, TimescaleDB, SQLite
+--
+-- REFERENCE DESIGN ONLY. The deployed app uses the smaller Supabase schema in
+-- supabase/migrations/0001_init.sql.
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
@@ -335,36 +338,7 @@ ORDER BY timestamp DESC
 LIMIT 100;
 
 -- ----------------------------------------------------------------------------
--- BOOTSTRAP: INITIAL CS SYSTEMS ADMINISTRATOR ACCOUNT
--- Run this once upon database provisioning
+-- BOOTSTRAP: no default account is seeded. The live deployment uses Supabase
+-- Auth (see supabase/migrations/0001_init.sql and README.md → "Create the
+-- first admin"); passwords are never stored in application tables.
 -- ----------------------------------------------------------------------------
-INSERT INTO users (
-    id, username, password_hash, pin_code, full_name, email,
-    role, department, avatar_color, status, created_at, notes
-) VALUES (
-    'usr_admin_01',
-    'admin',
-    'admin123',
-    '0000',
-    'CS Systems Administrator',
-    'cs-sysadmin@hamptonu.edu',
-    'Super Admin',
-    'Department of Computer Science',
-    '#02275A',
-    'active',
-    1730000000000,
-    'Master Administrator for digital signage, labs, and account permissions.'
-) ON CONFLICT (id) DO UPDATE SET
-    username = EXCLUDED.username,
-    role = EXCLUDED.role;
-
-INSERT INTO user_permissions (id, user_id, permission, granted_at)
-VALUES
-    ('perm_admin_1', 'usr_admin_01', 'manage_users', 1730000000000),
-    ('perm_admin_2', 'usr_admin_01', 'manage_labs', 1730000000000),
-    ('perm_admin_3', 'usr_admin_01', 'manage_events', 1730000000000),
-    ('perm_admin_4', 'usr_admin_01', 'upload_media', 1730000000000),
-    ('perm_admin_5', 'usr_admin_01', 'delete_media', 1730000000000),
-    ('perm_admin_6', 'usr_admin_01', 'broadcast_alerts', 1730000000000),
-    ('perm_admin_7', 'usr_admin_01', 'view_logs', 1730000000000)
-ON CONFLICT (id) DO NOTHING;

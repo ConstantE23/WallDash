@@ -395,10 +395,6 @@ export function validateUserRecord(user: Partial<SignageUser>): ValidationResult
     errors.push("Permissions must be an array.")
   }
 
-  if (user.pinCode && !/^\d{4,6}$/.test(user.pinCode)) {
-    errors.push("Staff PIN must be between 4 and 6 numeric digits.")
-  }
-
   return {
     valid: errors.length === 0,
     errors,

@@ -79,7 +79,10 @@ export interface SlideItem {
   mediaFit?: "cover" | "contain"
   durationSeconds?: number
   fileName?: string
+  /** Media lives in this browser's IndexedDB (local fallback only). */
   hasStoredBlob?: boolean
+  /** Object path in the Supabase `signage-media` bucket; `url` is its public URL. */
+  storagePath?: string
 }
 
 export interface SignageState {
@@ -98,6 +101,8 @@ export interface SignageState {
     clientRole: string
     timestamp: number
     description: string
+    /** SyncEngine client id that made the change (used to ignore realtime echoes). */
+    clientId?: string
   }
 }
 
@@ -192,17 +197,16 @@ export const ALL_PERMISSIONS: UserPermissionDefinition[] = [
 export interface SignageUser {
   id: string
   username: string
-  password?: string
   fullName: string
   email: string
-  role: UserRole
+  /** null = account exists but an admin hasn't assigned a role yet. */
+  role: UserRole | null
   permissions: UserPermission[]
   department: string
   avatarColor?: string
   status: "active" | "inactive" | "suspended"
   createdAt: number
   lastLoginAt?: number
-  pinCode?: string
   notes?: string
 }
 
@@ -240,7 +244,9 @@ export interface UploadRecord {
   formattedSize: string
   fileType: string
   mediaType: "image" | "video" | "document" | "ics"
+  /** IndexedDB key (fallback) or Supabase Storage object path. */
   storageKey?: string
+  /** Public URL (Supabase) or object URL (fallback). */
   previewUrl?: string
   associatedSlideId?: string
   associatedEventId?: string
