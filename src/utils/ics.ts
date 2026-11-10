@@ -140,10 +140,14 @@ function guessCategory(text: string): EventAnnouncement["category"] {
     return "Career"
   if (/workshop|bootcamp|training|study session|tutorial|lab session/.test(t))
     return "Workshop"
-  if (/lecture|talk|seminar|panel|speaker|symposium|colloquium/.test(t))
+  if (/lecture|talk|seminar|panel|speaker|symposium/.test(t))
     return "Lecture"
   if (/club|society|acm|meeting|chapter|association/.test(t)) return "Club"
-  return "Workshop"
+  if (/department|cs dept|faculty|colloquium|advising/.test(t))
+    return "Department Event"
+  if (/campus|university|student life|homecoming|convocation|rally/.test(t))
+    return "Campus Events"
+  return "Department Event"
 }
 
 export function parseIcs(text: string): IcsParseResult {
@@ -199,22 +203,40 @@ export function parseIcs(text: string): IcsParseResult {
               const location =
                 unescapeText(get("LOCATION")?.value || "") || "TBA"
               const description = unescapeText(get("DESCRIPTION")?.value || "")
+              const isMultiDay = !sameDay(start.date, endDate)
               const date = `${DAY_ABBR[start.date.getDay()]}, ${MONTH_ABBR[start.date.getMonth()]} ${start.date.getDate()}`
+              const endDateFormatted = isMultiDay
+                ? `${DAY_ABBR[endDate.getDay()]}, ${MONTH_ABBR[endDate.getMonth()]} ${endDate.getDate()}`
+                : undefined
               const time = start.allDay
                 ? "All Day"
-                : end && !sameDay(start.date, end.date)
-                  ? `${fmtTime(start.date)} – ${fmtTime(end.date)} (${MONTH_ABBR[end.date.getMonth()]} ${end.date.getDate()})`
+                : end && isMultiDay
+                  ? `${fmtTime(start.date)} – ${fmtTime(end.date)}`
                   : end
                     ? `${fmtTime(start.date)} – ${fmtTime(end.date)}`
                     : fmtTime(start.date)
 
+              const startDayMidnight = new Date(
+                start.date.getFullYear(),
+                start.date.getMonth(),
+                start.date.getDate(),
+                0,
+                0,
+                0,
+              )
+              const isOngoingOrToday =
+                now.getTime() >= startDayMidnight.getTime() &&
+                now.getTime() <= endsAt.getTime()
+
               result.events.push({
                 title,
                 date,
+                endDate: endDateFormatted,
+                isMultiDay,
                 time,
                 location,
                 category: guessCategory(`${title} ${description}`),
-                isToday: sameDay(start.date, now),
+                isToday: isOngoingOrToday,
                 description: description
                   ? description.slice(0, 160)
                   : undefined,

@@ -41,13 +41,28 @@ export interface LabInfo {
   updatedBy: string
 }
 
+export type EventCategory =
+  | "Department Event"
+  | "Campus Events"
+  | "Campus Event"
+  | "Capstone"
+  | "Workshop"
+  | "Club"
+  | "Lecture"
+  | "Career"
+  | "Hackathon"
+
 export interface EventAnnouncement {
   id: string
   title: string
   date: string
+  /** Optional end date display string when an event spans multiple days */
+  endDate?: string
+  /** Whether this event spans across multiple days */
+  isMultiDay?: boolean
   time: string
   location: string
-  category: "Capstone" | "Workshop" | "Club" | "Lecture" | "Career" | "Hackathon"
+  category: EventCategory
   isToday?: boolean
   isFeatured?: boolean
   description?: string
@@ -89,6 +104,12 @@ export interface SlideItem {
   zoom?: number
   background?: "blur" | "dark"
   showCaption?: boolean
+  /** Optional date string after which the slide is automatically hidden from TV rotation */
+  hideAfterDate?: string
+  /** Optional ISO timestamp (end of day) after which the slide is automatically hidden */
+  hideAfterISO?: string
+  /** Optional manual hide toggle so staff can hide a slide without deleting it */
+  hidden?: boolean
 }
 
 export interface SignageState {

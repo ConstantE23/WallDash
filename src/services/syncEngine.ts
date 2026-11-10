@@ -23,6 +23,10 @@ import { getDatabaseConnection } from "./dbConnection"
 import { supabase } from "./supabaseClient"
 import type { ActionLogCategory } from "../types/signage"
 import { isValidLabHours } from "../utils/labHours"
+import {
+  isEventExpired,
+  sortEventsChronologically,
+} from "../utils/datePickerUtils"
 
 // localStorage key: shared state in fallback mode, offline cache of the last good
 // Supabase state otherwise (so a screen keeps showing content if the network drops).
@@ -90,11 +94,13 @@ export class SyncEngine {
         ? `Lobby Screen #${this.clientId.slice(-4).toUpperCase()}`
         : `Staff Station #${this.clientId.slice(-4).toUpperCase()}`)
 
-    // Load initial state from storage, falling back to clean baseline
     const loaded = this.loadStoredState()
     this.currentState = loaded || INITIAL_STATE
     if (!this.currentState.slides) {
       this.currentState.slides = []
+    }
+    if (!this.currentState.events) {
+      this.currentState.events = []
     }
 
     this.initChannel()
@@ -106,6 +112,7 @@ export class SyncEngine {
     this.broadcastHeartbeat()
     this.requestStateFromPeers()
     this.rehydrateMedia()
+    this.purgeExpiredEvents()
     this.syncRemoteDatabase()
     this.initRealtime()
   }
@@ -211,6 +218,7 @@ export class SyncEngine {
       : this.currentState.activeSlideIndex
     const next: SignageState = {
       ...remote,
+      events: sortEventsChronologically(remote.events || []),
       slides,
       activeSlideIndex: Math.min(
         Math.max(0, activeSlideIndex || 0),
@@ -223,6 +231,7 @@ export class SyncEngine {
     this.currentState = next
     this.saveStoredState(next)
     this.notifyStateListeners(next, announce ? next.lastAction : undefined)
+    this.purgeExpiredEvents()
   }
 
   public getClientId(): string {
@@ -267,6 +276,17 @@ export class SyncEngine {
         const parsed = JSON.parse(saved)
         if (!parsed.slides) {
           parsed.slides = []
+        }
+        if (parsed.events) {
+          parsed.events = sortEventsChronologically(
+            parsed.events.filter(
+              (e: any) =>
+                e.id !== "ev-dept-colloquium" &&
+                e.id !== "ev-campus-expo" &&
+                e.id !== "ev-campus-rally" &&
+                !isEventExpired(e),
+            ),
+          )
         }
         if (parsed.labs) {
           for (const key of Object.keys(parsed.labs)) {
@@ -532,7 +552,41 @@ export class SyncEngine {
       if (changed) {
         this.notifyClientsListeners()
       }
+      // Automatically delete any schedule events whose end date/time has passed
+      this.purgeExpiredEvents()
     }, 3000)
+  }
+
+  /**
+   * Automatically removes events whose end date/time has passed.
+   * Persists the deletion to localStorage and (if signed-in staff) to Supabase.
+   */
+  public purgeExpiredEvents(): number {
+    const currentEvents = this.currentState.events || []
+    if (currentEvents.length === 0) return 0
+
+    const nowMs = Date.now()
+    const activeEvents = currentEvents.filter((e) => !isEventExpired(e, nowMs))
+    const removedCount = currentEvents.length - activeEvents.length
+    if (removedCount === 0) return 0
+
+    const newState: SignageState = {
+      ...this.currentState,
+      version: this.currentState.version + 1,
+      events: activeEvents,
+      lastAction: {
+        type: "AUTO_PURGE_EXPIRED_EVENTS",
+        byClient: this.clientName,
+        clientRole: this.clientRole,
+        timestamp: nowMs,
+        description: `Auto-deleted ${removedCount} past event${
+          removedCount === 1 ? "" : "s"
+        }`,
+      },
+    }
+
+    this.commitState(newState, { remote: true, log: true })
+    return removedCount
   }
 
   private requestStateFromPeers() {
@@ -684,11 +738,7 @@ export class SyncEngine {
       id: `ev-${Date.now()}-${i}-${Math.random().toString(36).substr(2, 4)}`,
     }))
 
-    const merged = [...added, ...kept].sort((a, b) => {
-      const ta = a.startISO ? new Date(a.startISO).getTime() : Infinity
-      const tb = b.startISO ? new Date(b.startISO).getTime() : Infinity
-      return ta - tb
-    })
+    const merged = sortEventsChronologically([...added, ...kept])
 
     this.commitState({
       ...this.currentState,
@@ -715,7 +765,10 @@ export class SyncEngine {
     const newState: SignageState = {
       ...this.currentState,
       version: this.currentState.version + 1,
-      events: [newEvent, ...this.currentState.events],
+      events: sortEventsChronologically([
+        newEvent,
+        ...this.currentState.events,
+      ]),
       lastAction: {
         type: "ADD_EVENT",
         byClient: this.clientName,
@@ -733,7 +786,9 @@ export class SyncEngine {
     const newState: SignageState = {
       ...this.currentState,
       version: this.currentState.version + 1,
-      events: this.currentState.events.filter((e) => e.id !== eventId),
+      events: sortEventsChronologically(
+        this.currentState.events.filter((e) => e.id !== eventId),
+      ),
       lastAction: {
         type: "REMOVE_EVENT",
         byClient: this.clientName,
@@ -750,8 +805,10 @@ export class SyncEngine {
     const newState: SignageState = {
       ...this.currentState,
       version: this.currentState.version + 1,
-      events: this.currentState.events.map((e) =>
-        e.id === eventId ? { ...e, ...changes } : e,
+      events: sortEventsChronologically(
+        this.currentState.events.map((e) =>
+          e.id === eventId ? { ...e, ...changes } : e,
+        ),
       ),
       lastAction: {
         type: "UPDATE_EVENT",

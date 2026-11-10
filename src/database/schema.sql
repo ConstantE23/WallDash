@@ -137,6 +137,9 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     event_time VARCHAR(64) NOT NULL,
     location VARCHAR(128) NOT NULL,
     category VARCHAR(64) NOT NULL CHECK (category IN (
+        'Department Event',
+        'Campus Events',
+        'Campus Event',
         'Capstone',
         'Workshop',
         'Club',

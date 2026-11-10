@@ -2,6 +2,8 @@ import React, { useRef, useState, useEffect } from "react"
 import {
   Tv,
   Eye,
+  EyeOff,
+  Clock,
   Crop,
   LogOut,
   ShieldCheck,
@@ -18,6 +20,9 @@ import {
   X,
   Images,
   CalendarDays,
+  CalendarRange,
+  ChevronLeft,
+  ChevronRight,
   Building2,
   GraduationCap,
   Megaphone,
@@ -43,6 +48,23 @@ import { getUserDatabase } from "../services/userDatabase"
 import { uploadSlideMedia, validateMediaFile } from "../services/mediaStorage"
 import ManageLoginPage from "./ManageLoginPage"
 import AdminPortalModal from "./AdminPortalModal"
+import EventDatePicker from "./EventDatePicker"
+import {
+  parseEventDate,
+  formatEventDate,
+  endOfDay,
+  getCalendarGrid,
+  getEventDateSpan,
+  getEventDayPosition,
+  getEventDisplayDate,
+  isEventOnDay,
+  isSameDay,
+  isSlideExpiredByDate,
+  isSlideVisibleOnTv,
+  sortEventsChronologically,
+  MONTH_NAMES_FULL,
+  DAY_NAMES_ABBR,
+} from "../utils/datePickerUtils"
 import { ui, segment } from "./manageStyles"
 import { getTutorCourses } from "../data/initialData"
 
@@ -57,6 +79,8 @@ const DAY_NAMES: Record<WeekDay, string> = {
   Fri: "Friday",
 }
 const EVENT_CATEGORIES: EventAnnouncement["category"][] = [
+  "Department Event",
+  "Campus Events",
   "Capstone",
   "Workshop",
   "Club",
@@ -116,7 +140,10 @@ export default function ManagePage({
     let cancelled = false
     db.restoreSession()
       .then((user) => {
-        if (!cancelled && user) setAuthenticatedUser(user)
+        if (!cancelled && user) {
+          setAuthenticatedUser(user)
+          engine.purgeExpiredEvents()
+        }
       })
       .catch(() => {})
       .finally(() => {
@@ -127,6 +154,7 @@ export default function ManagePage({
     const unsubSession = db.onSessionChange((user) => {
       if (user) {
         setAuthenticatedUser(user)
+        engine.purgeExpiredEvents()
         return
       }
       setAuthenticatedUser((prev) => {
@@ -159,27 +187,42 @@ export default function ManagePage({
   const [alertLevel, setAlertLevel] =
     useState<"info" | "warning" | "emergency">("info")
 
-  // New Event form state
+  // New Event / Schedule form state
   const [showAddEvent, setShowAddEvent] = useState(false)
   const [eventTitle, setEventTitle] = useState("")
   const [eventDate, setEventDate] = useState("")
+  const [eventEndDate, setEventEndDate] = useState("")
+  const [eventIsMultiDay, setEventIsMultiDay] = useState(false)
   const [eventTime, setEventTime] = useState("")
   const [eventLocation, setEventLocation] = useState("")
   const [eventCategory, setEventCategory] =
-    useState<EventAnnouncement["category"]>("Workshop")
+    useState<EventAnnouncement["category"]>("Department Event")
   const [eventDescription, setEventDescription] = useState("")
   const [eventIsToday, setEventIsToday] = useState(false)
 
-  // Edit Event state
+  // Edit Event / Schedule state
   const [editingEventId, setEditingEventId] = useState<string | null>(null)
   const [editEventTitle, setEditEventTitle] = useState("")
   const [editEventDate, setEditEventDate] = useState("")
+  const [editEventEndDate, setEditEventEndDate] = useState("")
+  const [editEventIsMultiDay, setEditEventIsMultiDay] = useState(false)
   const [editEventTime, setEditEventTime] = useState("")
   const [editEventLocation, setEditEventLocation] = useState("")
   const [editEventCategory, setEditEventCategory] =
     useState<EventAnnouncement["category"]>("Workshop")
   const [editEventDescription, setEditEventDescription] = useState("")
   const [editEventIsToday, setEditEventIsToday] = useState(false)
+
+  // Schedule Calendar view state inside ManagePage
+  const [scheduleViewYear, setScheduleViewYear] = useState(() =>
+    new Date().getFullYear(),
+  )
+  const [scheduleViewMonth, setScheduleViewMonth] = useState(() =>
+    new Date().getMonth(),
+  )
+  const [scheduleSelectedDate, setScheduleSelectedDate] = useState<Date | null>(
+    null,
+  )
 
   // Current console section; previewSlideId picks the slide the Preview opens on
   const [section, setSection] = useState<Section>("slides")
@@ -196,6 +239,7 @@ export default function ManagePage({
   const [mediaCategory, setMediaCategory] = useState("Campus Announcement")
   const [mediaCaption, setMediaCaption] = useState("")
   const [mediaDuration, setMediaDuration] = useState<number>(8)
+  const [mediaHideAfterDate, setMediaHideAfterDate] = useState("")
   const [isUploadingMedia, setIsUploadingMedia] = useState(false)
   const [mediaUploadProgress, setMediaUploadProgress] = useState<number | null>(
     null,
@@ -212,6 +256,10 @@ export default function ManagePage({
   const [editSlideCategory, setEditSlideCategory] = useState("")
   const [editSlideCaption, setEditSlideCaption] = useState("")
   const [editSlideDuration, setEditSlideDuration] = useState<number>(8)
+  const [editSlideHideAfterDate, setEditSlideHideAfterDate] = useState("")
+  const [slideFilter, setSlideFilter] = useState<"all" | "active" | "hidden">(
+    "all",
+  )
 
   // .ics import state
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -311,6 +359,13 @@ export default function ManagePage({
         customUser: authenticatedUser || undefined,
       })
 
+      const parsedHideAfter = mediaHideAfterDate.trim()
+        ? parseEventDate(mediaHideAfterDate)
+        : null
+      const hideAfterISO = parsedHideAfter
+        ? endOfDay(parsedHideAfter).toISOString()
+        : undefined
+
       // 2. Only after the upload is recorded, put it on the screens
       await engine.addSlide({
         id: slideId,
@@ -325,6 +380,8 @@ export default function ManagePage({
         durationSeconds:
           Number(mediaDuration) || (mediaType === "video" ? 15 : 8),
         fileName: mediaFile.name,
+        hideAfterDate: mediaHideAfterDate.trim() || undefined,
+        hideAfterISO,
       })
 
       setMediaUploadSuccess(
@@ -335,6 +392,7 @@ export default function ManagePage({
       setMediaTitle("")
       setMediaSubtitle("")
       setMediaCaption("")
+      setMediaHideAfterDate("")
       setShowAddMedia(false)
       setTimeout(() => setMediaUploadSuccess(null), 5000)
     } catch (err) {
@@ -524,17 +582,63 @@ export default function ManagePage({
   const handleAddEventSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!eventTitle.trim()) return
+    const parsedStart = parseEventDate(eventDate)
+    const parsedEnd =
+      eventIsMultiDay && eventEndDate.trim()
+        ? parseEventDate(eventEndDate)
+        : parsedStart
+
+    const startDt =
+      parsedStart && parsedEnd && parsedEnd.getTime() < parsedStart.getTime()
+        ? parsedEnd
+        : parsedStart
+    const endDt =
+      parsedStart && parsedEnd && parsedEnd.getTime() < parsedStart.getTime()
+        ? parsedStart
+        : parsedEnd || parsedStart
+
+    const startISO = startDt
+      ? new Date(
+          startDt.getFullYear(),
+          startDt.getMonth(),
+          startDt.getDate(),
+          0,
+          0,
+          0,
+        ).toISOString()
+      : undefined
+    const endISO = endDt
+      ? new Date(
+          endDt.getFullYear(),
+          endDt.getMonth(),
+          endDt.getDate(),
+          23,
+          59,
+          59,
+        ).toISOString()
+      : undefined
+
+    const isMulti =
+      Boolean(eventIsMultiDay && eventEndDate.trim()) &&
+      Boolean(startDt && endDt && !isSameDay(startDt, endDt))
+
     engine.addEvent({
       title: eventTitle.trim(),
       date: eventDate.trim(),
+      endDate: isMulti ? eventEndDate.trim() : undefined,
+      isMultiDay: isMulti,
       time: eventTime.trim(),
       location: eventLocation.trim(),
       category: eventCategory,
       isToday: eventIsToday,
       description: eventDescription.trim() || undefined,
+      startISO,
+      endISO,
     })
     setEventTitle("")
     setEventDate("")
+    setEventEndDate("")
+    setEventIsMultiDay(false)
     setEventTime("")
     setEventLocation("")
     setEventDescription("")
@@ -543,9 +647,15 @@ export default function ManagePage({
   }
 
   const handleStartEditEvent = (ev: EventAnnouncement) => {
+    const span = getEventDateSpan(ev)
     setEditingEventId(ev.id)
     setEditEventTitle(ev.title)
     setEditEventDate(ev.date)
+    setEditEventEndDate(
+      ev.endDate ||
+        (span.isMultiDay && span.endDate ? formatEventDate(span.endDate) : ""),
+    )
+    setEditEventIsMultiDay(span.isMultiDay)
     setEditEventTime(ev.time)
     setEditEventLocation(ev.location)
     setEditEventCategory(ev.category)
@@ -556,14 +666,58 @@ export default function ManagePage({
   const handleSaveEditEvent = (e: React.FormEvent) => {
     e.preventDefault()
     if (!editingEventId || !editEventTitle.trim()) return
+    const parsedStart = parseEventDate(editEventDate)
+    const parsedEnd =
+      editEventIsMultiDay && editEventEndDate.trim()
+        ? parseEventDate(editEventEndDate)
+        : parsedStart
+
+    const startDt =
+      parsedStart && parsedEnd && parsedEnd.getTime() < parsedStart.getTime()
+        ? parsedEnd
+        : parsedStart
+    const endDt =
+      parsedStart && parsedEnd && parsedEnd.getTime() < parsedStart.getTime()
+        ? parsedStart
+        : parsedEnd || parsedStart
+
+    const startISO = startDt
+      ? new Date(
+          startDt.getFullYear(),
+          startDt.getMonth(),
+          startDt.getDate(),
+          0,
+          0,
+          0,
+        ).toISOString()
+      : undefined
+    const endISO = endDt
+      ? new Date(
+          endDt.getFullYear(),
+          endDt.getMonth(),
+          endDt.getDate(),
+          23,
+          59,
+          59,
+        ).toISOString()
+      : undefined
+
+    const isMulti =
+      Boolean(editEventIsMultiDay && editEventEndDate.trim()) &&
+      Boolean(startDt && endDt && !isSameDay(startDt, endDt))
+
     engine.updateEvent(editingEventId, {
       title: editEventTitle.trim(),
       date: editEventDate.trim(),
+      endDate: isMulti ? editEventEndDate.trim() : undefined,
+      isMultiDay: isMulti,
       time: editEventTime.trim(),
       location: editEventLocation.trim(),
       category: editEventCategory,
       description: editEventDescription.trim() || undefined,
       isToday: editEventIsToday,
+      startISO,
+      endISO,
     })
     setEditingEventId(null)
   }
@@ -577,17 +731,26 @@ export default function ManagePage({
     setEditSlideDuration(
       slide.durationSeconds || (slide.mediaType === "video" ? 15 : 8),
     )
+    setEditSlideHideAfterDate(slide.hideAfterDate || "")
   }
 
   const handleSaveEditSlide = (e: React.FormEvent) => {
     e.preventDefault()
     if (!editingSlideId || !editSlideTitle.trim()) return
+    const parsedHideAfter = editSlideHideAfterDate.trim()
+      ? parseEventDate(editSlideHideAfterDate)
+      : null
+    const hideAfterISO = parsedHideAfter
+      ? endOfDay(parsedHideAfter).toISOString()
+      : undefined
     engine.updateSlide(editingSlideId, {
       title: editSlideTitle.trim(),
       subtitle: editSlideSubtitle.trim(),
       category: editSlideCategory.trim() || "Spotlight",
       caption: editSlideCaption.trim() || undefined,
       durationSeconds: editSlideDuration > 0 ? editSlideDuration : 8,
+      hideAfterDate: editSlideHideAfterDate.trim() || undefined,
+      hideAfterISO,
     })
     setEditingSlideId(null)
   }
@@ -635,7 +798,7 @@ export default function ManagePage({
     { id: "preview", label: "Preview & layout", icon: Eye },
     {
       id: "events",
-      label: "Events",
+      label: "Schedule",
       icon: CalendarDays,
       meta: <span className="text-xs text-slate-400">{state.events.length}</span>,
     },
@@ -696,6 +859,8 @@ export default function ManagePage({
     v: {
       title: string
       date: string
+      endDate: string
+      isMultiDay: boolean
       time: string
       location: string
       category: EventAnnouncement["category"]
@@ -705,114 +870,174 @@ export default function ManagePage({
     set: {
       title: (val: string) => void
       date: (val: string) => void
+      endDate: (val: string) => void
+      isMultiDay: (val: boolean) => void
       time: (val: string) => void
       location: (val: string) => void
       category: (val: EventAnnouncement["category"]) => void
       description: (val: string) => void
       isToday: (val: boolean) => void
     },
-  ) => (
-    <>
-      <div>
-        <label className={ui.label} htmlFor={`${idPrefix}-title`}>
-          Title
+  ) => {
+    const spanInfo = getEventDateSpan({
+      date: v.date,
+      endDate: v.isMultiDay ? v.endDate : undefined,
+      isMultiDay: v.isMultiDay,
+    })
+
+    return (
+      <>
+        <div>
+          <label className={ui.label} htmlFor={`${idPrefix}-title`}>
+            Title
+          </label>
+          <input
+            id={`${idPrefix}-title`}
+            type="text"
+            required
+            placeholder="Coding interview workshop or Fall Hackathon Week"
+            value={v.title}
+            onChange={(e) => set.title(e.target.value)}
+            className={ui.input}
+          />
+        </div>
+
+        {/* Multi-day toggle */}
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50/70 px-3 py-2">
+          <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-800 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={v.isMultiDay}
+              onChange={(e) => {
+                const checked = e.target.checked
+                set.isMultiDay(checked)
+                if (checked && !v.endDate && v.date) {
+                  const start = parseEventDate(v.date)
+                  if (start) {
+                    const nextDay = new Date(start)
+                    nextDay.setDate(start.getDate() + 2)
+                    set.endDate(formatEventDate(nextDay))
+                  }
+                }
+              }}
+              className="h-4 w-4 rounded border-slate-300 accent-[#02275A]"
+            />
+            <CalendarRange className="w-4 h-4 text-[#02275A]" />
+            <span>Multi-day event (spans across multiple days on calendar)</span>
+          </label>
+          {v.isMultiDay && spanInfo.totalDays > 1 && (
+            <span className="text-xs font-semibold bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full">
+              Spans {spanInfo.totalDays} days
+            </span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className={ui.label} htmlFor={`${idPrefix}-date`}>
+              {v.isMultiDay ? "Start Date" : "Date"}
+            </label>
+            <EventDatePicker
+              id={`${idPrefix}-date`}
+              value={v.date}
+              onChange={(val) => set.date(val)}
+              onDateSelect={(_date, _formatted, isToday) => {
+                if (isToday) set.isToday(true)
+              }}
+              placeholder="e.g. MON NOVEMBER 9"
+              required
+              theme="light"
+            />
+          </div>
+
+          {v.isMultiDay && (
+            <div>
+              <label className={ui.label} htmlFor={`${idPrefix}-end-date`}>
+                End Date
+              </label>
+              <EventDatePicker
+                id={`${idPrefix}-end-date`}
+                value={v.endDate}
+                onChange={(val) => set.endDate(val)}
+                placeholder="e.g. FRI NOVEMBER 13"
+                required={v.isMultiDay}
+                theme="light"
+              />
+            </div>
+          )}
+
+          <div>
+            <label className={ui.label} htmlFor={`${idPrefix}-time`}>
+              Time
+            </label>
+            <input
+              id={`${idPrefix}-time`}
+              type="text"
+              required
+              placeholder="3:00 PM – 5:00 PM or All Day"
+              value={v.time}
+              onChange={(e) => set.time(e.target.value)}
+              className={ui.input}
+            />
+          </div>
+          <div>
+            <label className={ui.label} htmlFor={`${idPrefix}-location`}>
+              Location
+            </label>
+            <input
+              id={`${idPrefix}-location`}
+              type="text"
+              required
+              placeholder="Room 126"
+              value={v.location}
+              onChange={(e) => set.location(e.target.value)}
+              className={ui.input}
+            />
+          </div>
+          <div>
+            <label className={ui.label} htmlFor={`${idPrefix}-category`}>
+              Category
+            </label>
+            <select
+              id={`${idPrefix}-category`}
+              value={v.category}
+              onChange={(e) =>
+                set.category(e.target.value as EventAnnouncement["category"])
+              }
+              className={`${ui.select} w-full`}
+            >
+              {EVENT_CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div>
+          <label className={ui.label} htmlFor={`${idPrefix}-description`}>
+            Description <span className="font-normal text-slate-500">(optional)</span>
+          </label>
+          <textarea
+            id={`${idPrefix}-description`}
+            rows={2}
+            value={v.description}
+            onChange={(e) => set.description(e.target.value)}
+            className={`${ui.input} resize-none`}
+          />
+        </div>
+        <label className="inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={v.isToday}
+            onChange={(e) => set.isToday(e.target.checked)}
+            className="h-4 w-4 rounded border-slate-300 accent-[#02275A]"
+          />
+          Feature under "Happening today / Ongoing"
         </label>
-        <input
-          id={`${idPrefix}-title`}
-          type="text"
-          required
-          placeholder="Coding interview workshop"
-          value={v.title}
-          onChange={(e) => set.title(e.target.value)}
-          className={ui.input}
-        />
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div>
-          <label className={ui.label} htmlFor={`${idPrefix}-date`}>
-            Date
-          </label>
-          <input
-            id={`${idPrefix}-date`}
-            type="text"
-            required
-            placeholder="Fri, Oct 10"
-            value={v.date}
-            onChange={(e) => set.date(e.target.value)}
-            className={ui.input}
-          />
-        </div>
-        <div>
-          <label className={ui.label} htmlFor={`${idPrefix}-time`}>
-            Time
-          </label>
-          <input
-            id={`${idPrefix}-time`}
-            type="text"
-            required
-            placeholder="3:00 PM – 5:00 PM"
-            value={v.time}
-            onChange={(e) => set.time(e.target.value)}
-            className={ui.input}
-          />
-        </div>
-        <div>
-          <label className={ui.label} htmlFor={`${idPrefix}-location`}>
-            Location
-          </label>
-          <input
-            id={`${idPrefix}-location`}
-            type="text"
-            required
-            placeholder="Room 126"
-            value={v.location}
-            onChange={(e) => set.location(e.target.value)}
-            className={ui.input}
-          />
-        </div>
-        <div>
-          <label className={ui.label} htmlFor={`${idPrefix}-category`}>
-            Category
-          </label>
-          <select
-            id={`${idPrefix}-category`}
-            value={v.category}
-            onChange={(e) =>
-              set.category(e.target.value as EventAnnouncement["category"])
-            }
-            className={`${ui.select} w-full`}
-          >
-            {EVENT_CATEGORIES.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-      <div>
-        <label className={ui.label} htmlFor={`${idPrefix}-description`}>
-          Description <span className="font-normal text-slate-500">(optional)</span>
-        </label>
-        <textarea
-          id={`${idPrefix}-description`}
-          rows={2}
-          value={v.description}
-          onChange={(e) => set.description(e.target.value)}
-          className={`${ui.input} resize-none`}
-        />
-      </div>
-      <label className="inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-        <input
-          type="checkbox"
-          checked={v.isToday}
-          onChange={(e) => set.isToday(e.target.checked)}
-          className="h-4 w-4 rounded border-slate-300 accent-[#02275A]"
-        />
-        Feature under "Happening today"
-      </label>
-    </>
-  )
+      </>
+    )
+  }
 
   // ---------------------------------------------------------------- Slides
   const renderSlidesSection = () => (
@@ -991,6 +1216,29 @@ export default function ManagePage({
               />
               <p className={`${ui.hint} mt-1`}>About 8 for photos, 15 for videos.</p>
             </div>
+            <div className="sm:col-span-2">
+              <div className="flex items-center justify-between">
+                <label className={ui.label} htmlFor="media-hide-after">
+                  Hide after date <span className="font-normal text-slate-500">(optional — auto-hides from TV after this day)</span>
+                </label>
+                {mediaHideAfterDate && (
+                  <button
+                    type="button"
+                    onClick={() => setMediaHideAfterDate("")}
+                    className="text-xs font-medium text-slate-500 hover:text-slate-800 cursor-pointer"
+                  >
+                    Clear date
+                  </button>
+                )}
+              </div>
+              <EventDatePicker
+                id="media-hide-after"
+                value={mediaHideAfterDate}
+                onChange={(val) => setMediaHideAfterDate(val)}
+                placeholder="No expiration (stay visible indefinitely)"
+                theme="light"
+              />
+            </div>
           </div>
 
           <div>
@@ -1053,220 +1301,371 @@ export default function ManagePage({
           No slides yet. Upload a photo or video to start the slideshow.
         </div>
       ) : (
-        <ul className={`${ui.card} divide-y divide-slate-100`}>
-          {slides.map((slide, idx) => {
-            const isCurrent = state.activeSlideIndex === idx
-            const isVid =
-              slide.mediaType === "video" ||
-              Boolean(
-                slide.url &&
-                  (slide.url.match(/\.(mp4|webm|mov|ogg)$/i) ||
-                    slide.url.startsWith("data:video/")),
-              )
-
+        <>
+          {/* Organization filter tabs for Active vs Hidden/Expired slides */}
+          {(() => {
+            const activeCount = slides.filter((s) => isSlideVisibleOnTv(s)).length
+            const hiddenCount = slides.length - activeCount
             return (
-              <li key={slide.id}>
-                <div className="flex items-center gap-3 px-3 py-3 sm:px-4">
-                  <span className="w-5 flex-shrink-0 text-right text-sm text-slate-400">
-                    {idx + 1}
-                  </span>
-                  <div className="relative h-12 w-20 flex-shrink-0 overflow-hidden rounded bg-slate-900">
-                    {isVid ? (
-                      <>
-                        <video
-                          src={slide.url}
-                          className="h-full w-full object-cover"
-                          muted
-                          preload="metadata"
-                        />
-                        <span className="absolute inset-0 flex items-center justify-center bg-black/30">
-                          <Video className="w-4 h-4 text-white" />
-                        </span>
-                      </>
-                    ) : (
-                      <img
-                        src={slide.url}
-                        alt=""
-                        className="h-full w-full object-cover"
-                      />
-                    )}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate text-sm font-medium text-slate-900">
-                        {slide.title}
-                      </span>
-                      {isCurrent && (
-                        <span className={`${ui.badge} bg-emerald-100 text-emerald-800`}>
-                          On screen
-                        </span>
-                      )}
-                    </div>
-                    <p className="flex items-center gap-1.5 truncate text-sm text-slate-500">
-                      {isVid ? (
-                        <Video className="w-3.5 h-3.5 flex-shrink-0" />
-                      ) : (
-                        <ImageIcon className="w-3.5 h-3.5 flex-shrink-0" />
-                      )}
-                      {slide.durationSeconds || (isVid ? 12 : 6)}s · {slide.category}
-                    </p>
-                  </div>
-                  <div className="flex flex-shrink-0 items-center gap-0.5">
-                    <button
-                      type="button"
-                      onClick={() => engine.setActiveSlide(idx, true)}
-                      disabled={isCurrent}
-                      title="Show this slide on every screen now"
-                      className="hidden sm:inline-flex mr-1 rounded-md px-2.5 py-1.5 text-sm font-medium text-[#02275A] hover:bg-slate-100 disabled:text-slate-400 disabled:hover:bg-transparent cursor-pointer disabled:cursor-default"
-                    >
-                      Show now
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPreviewSlideId(slide.id)
-                        setSection("preview")
-                      }}
-                      className={ui.iconBtn}
-                      title="Adjust framing on the TV"
-                      aria-label="Adjust framing"
-                    >
-                      <Crop className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      disabled={idx === 0}
-                      onClick={() => handleMoveSlide(idx, "up")}
-                      className={ui.iconBtn}
-                      title="Move up"
-                      aria-label="Move up"
-                    >
-                      <ArrowUp className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      disabled={idx === slides.length - 1}
-                      onClick={() => handleMoveSlide(idx, "down")}
-                      className={ui.iconBtn}
-                      title="Move down"
-                      aria-label="Move down"
-                    >
-                      <ArrowDown className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        editingSlideId === slide.id
-                          ? setEditingSlideId(null)
-                          : handleStartEditSlide(slide)
-                      }
-                      className={ui.iconBtn}
-                      title="Edit"
-                      aria-label="Edit slide"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteSlide(slide.id)}
-                      className={ui.iconBtnDanger}
-                      title="Delete"
-                      aria-label="Delete slide"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-
-                {editingSlideId === slide.id && (
-                  <form
-                    onSubmit={handleSaveEditSlide}
-                    className="space-y-3 border-t border-slate-100 bg-slate-50 px-4 py-4"
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="inline-flex rounded-md border border-slate-200 bg-white p-0.5 text-xs font-medium">
+                  <button
+                    type="button"
+                    onClick={() => setSlideFilter("all")}
+                    className={`rounded px-2.5 py-1 transition cursor-pointer ${
+                      slideFilter === "all"
+                        ? "bg-[#02275A] text-white"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
                   >
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className={ui.label} htmlFor={`slide-title-${slide.id}`}>
-                          Title
-                        </label>
-                        <input
-                          id={`slide-title-${slide.id}`}
-                          type="text"
-                          required
-                          value={editSlideTitle}
-                          onChange={(e) => setEditSlideTitle(e.target.value)}
-                          className={ui.input}
+                    All ({slides.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSlideFilter("active")}
+                    className={`rounded px-2.5 py-1 transition cursor-pointer ${
+                      slideFilter === "active"
+                        ? "bg-[#02275A] text-white"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    Active on TV ({activeCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSlideFilter("hidden")}
+                    className={`rounded px-2.5 py-1 transition cursor-pointer ${
+                      slideFilter === "hidden"
+                        ? "bg-[#02275A] text-white"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    Hidden / Past Date ({hiddenCount})
+                  </button>
+                </div>
+                {hiddenCount > 0 && (
+                  <span className="text-xs text-slate-500">
+                    {hiddenCount} slide{hiddenCount === 1 ? " is" : "s are"} hidden from TV rotation
+                  </span>
+                )}
+              </div>
+            )
+          })()}
+
+          <ul className={`${ui.card} divide-y divide-slate-100`}>
+            {slides.map((slide, idx) => {
+              const isExpiredByDate = isSlideExpiredByDate(slide)
+              const isVisibleOnTv = isSlideVisibleOnTv(slide)
+              if (slideFilter === "active" && !isVisibleOnTv) return null
+              if (slideFilter === "hidden" && isVisibleOnTv) return null
+
+              const isCurrent = state.activeSlideIndex === idx && isVisibleOnTv
+              const isVid =
+                slide.mediaType === "video" ||
+                Boolean(
+                  slide.url &&
+                    (slide.url.match(/\.(mp4|webm|mov|ogg)$/i) ||
+                      slide.url.startsWith("data:video/")),
+                )
+
+              return (
+                <li
+                  key={slide.id}
+                  className={!isVisibleOnTv ? "bg-slate-50/70" : undefined}
+                >
+                  <div className="flex items-center gap-3 px-3 py-3 sm:px-4">
+                    <span className="w-5 flex-shrink-0 text-right text-sm text-slate-400">
+                      {idx + 1}
+                    </span>
+                    <div
+                      className={`relative h-12 w-20 flex-shrink-0 overflow-hidden rounded bg-slate-900 ${
+                        !isVisibleOnTv ? "opacity-50 grayscale" : ""
+                      }`}
+                    >
+                      {isVid ? (
+                        <>
+                          <video
+                            src={slide.url}
+                            className="h-full w-full object-cover"
+                            muted
+                            preload="metadata"
+                          />
+                          <span className="absolute inset-0 flex items-center justify-center bg-black/30">
+                            <Video className="w-4 h-4 text-white" />
+                          </span>
+                        </>
+                      ) : (
+                        <img
+                          src={slide.url}
+                          alt=""
+                          className="h-full w-full object-cover"
                         />
-                      </div>
-                      <div>
-                        <label className={ui.label} htmlFor={`slide-subtitle-${slide.id}`}>
-                          Subtitle
-                        </label>
-                        <input
-                          id={`slide-subtitle-${slide.id}`}
-                          type="text"
-                          value={editSlideSubtitle}
-                          onChange={(e) => setEditSlideSubtitle(e.target.value)}
-                          className={ui.input}
-                        />
-                      </div>
-                      <div>
-                        <label className={ui.label} htmlFor={`slide-category-${slide.id}`}>
-                          Category
-                        </label>
-                        <input
-                          id={`slide-category-${slide.id}`}
-                          type="text"
-                          list="slide-category-options"
-                          value={editSlideCategory}
-                          onChange={(e) => setEditSlideCategory(e.target.value)}
-                          className={ui.input}
-                        />
-                      </div>
-                      <div>
-                        <label className={ui.label} htmlFor={`slide-duration-${slide.id}`}>
-                          Seconds on screen
-                        </label>
-                        <input
-                          id={`slide-duration-${slide.id}`}
-                          type="number"
-                          min={3}
-                          max={120}
-                          value={editSlideDuration}
-                          onChange={(e) => setEditSlideDuration(Number(e.target.value))}
-                          className={`${ui.input} max-w-[8rem]`}
-                        />
-                      </div>
+                      )}
                     </div>
-                    <div>
-                      <label className={ui.label} htmlFor={`slide-caption-${slide.id}`}>
-                        Caption
-                      </label>
-                      <textarea
-                        id={`slide-caption-${slide.id}`}
-                        rows={2}
-                        value={editSlideCaption}
-                        onChange={(e) => setEditSlideCaption(e.target.value)}
-                        className={`${ui.input} resize-none`}
-                      />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`truncate text-sm font-medium ${
+                            !isVisibleOnTv
+                              ? "text-slate-500 line-through"
+                              : "text-slate-900"
+                          }`}
+                        >
+                          {slide.title}
+                        </span>
+                        {isCurrent && (
+                          <span className={`${ui.badge} bg-emerald-100 text-emerald-800`}>
+                            On screen
+                          </span>
+                        )}
+                        {slide.hidden && (
+                          <span className={`${ui.badge} bg-slate-200 text-slate-700`}>
+                            Hidden manually
+                          </span>
+                        )}
+                        {isExpiredByDate && (
+                          <span className={`${ui.badge} bg-amber-100 text-amber-800`}>
+                            Auto-hidden (past {slide.hideAfterDate})
+                          </span>
+                        )}
+                        {!isExpiredByDate && slide.hideAfterDate && (
+                          <span className={`${ui.badge} bg-sky-100 text-sky-800 flex items-center gap-1`}>
+                            <Clock className="w-3 h-3" />
+                            Hide after {slide.hideAfterDate}
+                          </span>
+                        )}
+                      </div>
+                      <p className="flex items-center gap-1.5 truncate text-sm text-slate-500">
+                        {isVid ? (
+                          <Video className="w-3.5 h-3.5 flex-shrink-0" />
+                        ) : (
+                          <ImageIcon className="w-3.5 h-3.5 flex-shrink-0" />
+                        )}
+                        {slide.durationSeconds || (isVid ? 12 : 6)}s · {slide.category}
+                      </p>
                     </div>
-                    <div className="flex justify-end gap-2">
+                    <div className="flex flex-shrink-0 items-center gap-0.5">
+                      {isExpiredByDate ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            engine.updateSlide(slide.id, {
+                              hideAfterDate: undefined,
+                              hideAfterISO: undefined,
+                              hidden: false,
+                            })
+                          }
+                          title="Clear past hide-after date and restore to TV rotation"
+                          className="mr-1 rounded-md bg-amber-50 border border-amber-200 px-2.5 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100 cursor-pointer"
+                        >
+                          Restore to TV
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => engine.setActiveSlide(idx, true)}
+                          disabled={isCurrent || !isVisibleOnTv}
+                          title="Show this slide on every screen now"
+                          className="hidden sm:inline-flex mr-1 rounded-md px-2.5 py-1.5 text-sm font-medium text-[#02275A] hover:bg-slate-100 disabled:text-slate-400 disabled:hover:bg-transparent cursor-pointer disabled:cursor-default"
+                        >
+                          Show now
+                        </button>
+                      )}
                       <button
                         type="button"
-                        onClick={() => setEditingSlideId(null)}
-                        className={ui.btnSecondary}
+                        onClick={() =>
+                          engine.updateSlide(slide.id, {
+                            hidden: !slide.hidden,
+                          })
+                        }
+                        className={ui.iconBtn}
+                        title={
+                          slide.hidden
+                            ? "Unhide slide on TV"
+                            : "Hide slide from TV"
+                        }
+                        aria-label={
+                          slide.hidden
+                            ? "Unhide slide on TV"
+                            : "Hide slide from TV"
+                        }
                       >
-                        Cancel
+                        {slide.hidden ? (
+                          <EyeOff className="w-4 h-4 text-slate-500" />
+                        ) : (
+                          <Eye className="w-4 h-4" />
+                        )}
                       </button>
-                      <button type="submit" className={ui.btnPrimary}>
-                        Save changes
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPreviewSlideId(slide.id)
+                          setSection("preview")
+                        }}
+                        className={ui.iconBtn}
+                        title="Adjust framing on the TV"
+                        aria-label="Adjust framing"
+                      >
+                        <Crop className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={idx === 0}
+                        onClick={() => handleMoveSlide(idx, "up")}
+                        className={ui.iconBtn}
+                        title="Move up"
+                        aria-label="Move up"
+                      >
+                        <ArrowUp className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={idx === slides.length - 1}
+                        onClick={() => handleMoveSlide(idx, "down")}
+                        className={ui.iconBtn}
+                        title="Move down"
+                        aria-label="Move down"
+                      >
+                        <ArrowDown className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          editingSlideId === slide.id
+                            ? setEditingSlideId(null)
+                            : handleStartEditSlide(slide)
+                        }
+                        className={ui.iconBtn}
+                        title="Edit"
+                        aria-label="Edit slide"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSlide(slide.id)}
+                        className={ui.iconBtnDanger}
+                        title="Delete"
+                        aria-label="Delete slide"
+                      >
+                        <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
-                  </form>
-                )}
-              </li>
-            )
-          })}
-        </ul>
+                  </div>
+
+                  {editingSlideId === slide.id && (
+                    <form
+                      onSubmit={handleSaveEditSlide}
+                      className="space-y-3 border-t border-slate-100 bg-slate-50 px-4 py-4"
+                    >
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className={ui.label} htmlFor={`slide-title-${slide.id}`}>
+                            Title
+                          </label>
+                          <input
+                            id={`slide-title-${slide.id}`}
+                            type="text"
+                            required
+                            value={editSlideTitle}
+                            onChange={(e) => setEditSlideTitle(e.target.value)}
+                            className={ui.input}
+                          />
+                        </div>
+                        <div>
+                          <label className={ui.label} htmlFor={`slide-subtitle-${slide.id}`}>
+                            Subtitle
+                          </label>
+                          <input
+                            id={`slide-subtitle-${slide.id}`}
+                            type="text"
+                            value={editSlideSubtitle}
+                            onChange={(e) => setEditSlideSubtitle(e.target.value)}
+                            className={ui.input}
+                          />
+                        </div>
+                        <div>
+                          <label className={ui.label} htmlFor={`slide-category-${slide.id}`}>
+                            Category
+                          </label>
+                          <input
+                            id={`slide-category-${slide.id}`}
+                            type="text"
+                            list="slide-category-options"
+                            value={editSlideCategory}
+                            onChange={(e) => setEditSlideCategory(e.target.value)}
+                            className={ui.input}
+                          />
+                        </div>
+                        <div>
+                          <label className={ui.label} htmlFor={`slide-duration-${slide.id}`}>
+                            Seconds on screen
+                          </label>
+                          <input
+                            id={`slide-duration-${slide.id}`}
+                            type="number"
+                            min={3}
+                            max={120}
+                            value={editSlideDuration}
+                            onChange={(e) => setEditSlideDuration(Number(e.target.value))}
+                            className={`${ui.input} max-w-[8rem]`}
+                          />
+                        </div>
+                        <div className="sm:col-span-2">
+                          <div className="flex items-center justify-between">
+                            <label className={ui.label} htmlFor={`slide-hide-after-${slide.id}`}>
+                              Hide after date <span className="font-normal text-slate-500">(optional — auto-hides from TV after this day)</span>
+                            </label>
+                            {editSlideHideAfterDate && (
+                              <button
+                                type="button"
+                                onClick={() => setEditSlideHideAfterDate("")}
+                                className="text-xs font-medium text-slate-500 hover:text-slate-800 cursor-pointer"
+                              >
+                                Clear date
+                              </button>
+                            )}
+                          </div>
+                          <EventDatePicker
+                            id={`slide-hide-after-${slide.id}`}
+                            value={editSlideHideAfterDate}
+                            onChange={(val) => setEditSlideHideAfterDate(val)}
+                            placeholder="No expiration (stay visible indefinitely)"
+                            theme="light"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className={ui.label} htmlFor={`slide-caption-${slide.id}`}>
+                          Caption
+                        </label>
+                        <textarea
+                          id={`slide-caption-${slide.id}`}
+                          rows={2}
+                          value={editSlideCaption}
+                          onChange={(e) => setEditSlideCaption(e.target.value)}
+                          className={`${ui.input} resize-none`}
+                        />
+                      </div>
+                      <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setEditingSlideId(null)}
+                          className={ui.btnSecondary}
+                        >
+                          Cancel
+                        </button>
+                        <button type="submit" className={ui.btnPrimary}>
+                          Save changes
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        </>
       )}
       <datalist id="slide-category-options">
         {SLIDE_CATEGORIES.map((c) => (
@@ -1276,197 +1675,419 @@ export default function ManagePage({
     </>
   )
 
-  // ---------------------------------------------------------------- Events
-  const renderEventsSection = () => (
-    <>
-      {renderSectionHeader(
-        "Events",
-        "Announcements listed on the left side of the TV screen.",
-        <>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".ics,text/calendar"
-            onChange={handleIcsFile}
-            className="hidden"
-          />
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className={ui.btnSecondary}
-            title="Import events from a calendar (.ics) file"
-          >
-            <Upload className="w-4 h-4" />
-            Import calendar
-          </button>
-          {!showAddEvent && (
+  // ---------------------------------------------------------------- Schedule
+  const renderEventsSection = () => {
+    const sortedEvents = sortEventsChronologically(state.events)
+    const calendarCells = getCalendarGrid(
+      scheduleViewYear,
+      scheduleViewMonth,
+      scheduleSelectedDate,
+    )
+    const multiDayEvents = sortedEvents.filter(
+      (ev) => getEventDateSpan(ev).isMultiDay,
+    )
+    const filteredEvents = scheduleSelectedDate
+      ? sortedEvents.filter((ev) => isEventOnDay(ev, scheduleSelectedDate))
+      : sortedEvents
+
+    return (
+      <>
+        {renderSectionHeader(
+          "Schedule",
+          "Calendar and single-day or multi-day schedule items displayed on the left side of the TV screen.",
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".ics,text/calendar"
+              onChange={handleIcsFile}
+              className="hidden"
+            />
             <button
               type="button"
-              onClick={() => setShowAddEvent(true)}
-              className={ui.btnPrimary}
+              onClick={() => fileInputRef.current?.click()}
+              className={ui.btnSecondary}
+              title="Import schedule from a calendar (.ics) file"
             >
-              <Plus className="w-4 h-4" />
-              Add event
+              <Upload className="w-4 h-4" />
+              Import calendar
             </button>
-          )}
-        </>,
-      )}
-
-      {importMsg &&
-        renderNotice(importMsg.type === "ok" ? "ok" : "error", importMsg.text, () =>
-          setImportMsg(null),
+            {!showAddEvent && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (scheduleSelectedDate && !eventDate) {
+                    setEventDate(formatEventDate(scheduleSelectedDate))
+                  }
+                  setShowAddEvent(true)
+                }}
+                className={ui.btnPrimary}
+              >
+                <Plus className="w-4 h-4" />
+                Add to schedule
+              </button>
+            )}
+          </>,
         )}
 
-      {showAddEvent && (
-        <form
-          onSubmit={handleAddEventSubmit}
-          className={`${ui.card} ${ui.cardBody} space-y-3`}
-        >
-          <h2 className={ui.sectionTitle}>New event</h2>
-          {renderEventFields(
-            "new-event",
-            {
-              title: eventTitle,
-              date: eventDate,
-              time: eventTime,
-              location: eventLocation,
-              category: eventCategory,
-              description: eventDescription,
-              isToday: eventIsToday,
-            },
-            {
-              title: setEventTitle,
-              date: setEventDate,
-              time: setEventTime,
-              location: setEventLocation,
-              category: setEventCategory,
-              description: setEventDescription,
-              isToday: setEventIsToday,
-            },
+        {importMsg &&
+          renderNotice(
+            importMsg.type === "ok" ? "ok" : "error",
+            importMsg.text,
+            () => setImportMsg(null),
           )}
-          <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
-            <button
-              type="button"
-              onClick={() => setShowAddEvent(false)}
-              className={ui.btnSecondary}
-            >
-              Cancel
-            </button>
-            <button type="submit" className={ui.btnPrimary}>
-              Add event
-            </button>
-          </div>
-        </form>
-      )}
 
-      {state.events.length === 0 ? (
-        <div className={ui.empty}>
-          No events yet. Add one, or import a calendar (.ics) file.
-        </div>
-      ) : (
-        <ul className={`${ui.card} divide-y divide-slate-100`}>
-          {state.events.map((ev) =>
-            editingEventId === ev.id ? (
-              <li key={ev.id}>
-                <form
-                  onSubmit={handleSaveEditEvent}
-                  className="space-y-3 bg-slate-50 px-4 py-4"
+        {/* Interactive Schedule Calendar Overview */}
+        <div className={`${ui.card} ${ui.cardBody} space-y-3`}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <CalendarDays className="w-4 h-4 text-[#02275A]" />
+              <h2 className="text-sm font-semibold text-slate-900">
+                {MONTH_NAMES_FULL[scheduleViewMonth]} {scheduleViewYear}
+              </h2>
+              {scheduleSelectedDate && (
+                <button
+                  type="button"
+                  onClick={() => setScheduleSelectedDate(null)}
+                  className="text-xs font-medium bg-[#02275A]/10 text-[#02275A] hover:bg-[#02275A]/20 px-2 py-0.5 rounded transition-colors cursor-pointer"
                 >
-                  {renderEventFields(
-                    `edit-${ev.id}`,
-                    {
-                      title: editEventTitle,
-                      date: editEventDate,
-                      time: editEventTime,
-                      location: editEventLocation,
-                      category: editEventCategory,
-                      description: editEventDescription,
-                      isToday: editEventIsToday,
-                    },
-                    {
-                      title: setEditEventTitle,
-                      date: setEditEventDate,
-                      time: setEditEventTime,
-                      location: setEditEventLocation,
-                      category: setEditEventCategory,
-                      description: setEditEventDescription,
-                      isToday: setEditEventIsToday,
-                    },
-                  )}
-                  <div className="flex justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setEditingEventId(null)}
-                      className={ui.btnSecondary}
+                  Showing {formatEventDate(scheduleSelectedDate, "short")} · Clear filter
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => {
+                  const now = new Date()
+                  setScheduleViewYear(now.getFullYear())
+                  setScheduleViewMonth(now.getMonth())
+                  setScheduleSelectedDate(null)
+                }}
+                className="px-2 py-1 text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded cursor-pointer"
+              >
+                Today
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (scheduleViewMonth === 0) {
+                    setScheduleViewMonth(11)
+                    setScheduleViewYear((y) => y - 1)
+                  } else {
+                    setScheduleViewMonth((m) => m - 1)
+                  }
+                }}
+                className={ui.iconBtn}
+                aria-label="Previous month"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (scheduleViewMonth === 11) {
+                    setScheduleViewMonth(0)
+                    setScheduleViewYear((y) => y + 1)
+                  } else {
+                    setScheduleViewMonth((m) => m + 1)
+                  }
+                }}
+                className={ui.iconBtn}
+                aria-label="Next month"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-7 text-center border-b border-slate-100 pb-1">
+            {DAY_NAMES_ABBR.map((d) => (
+              <div
+                key={d}
+                className="text-[11px] font-semibold uppercase tracking-wider text-slate-400"
+              >
+                {d}
+              </div>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-7 gap-1">
+            {calendarCells.map((cell, idx) => {
+              const dayEvents = sortedEvents.filter((ev) =>
+                isEventOnDay(ev, cell.date),
+              )
+              const cellMulti = multiDayEvents
+                .map((ev) => ({
+                  event: ev,
+                  pos: getEventDayPosition(ev, cell.date),
+                }))
+                .filter(
+                  (
+                    item,
+                  ): item is {
+                    event: EventAnnouncement
+                    pos: "start" | "middle" | "end" | "single"
+                  } => item.pos !== null,
+                )
+
+              const isSelected = scheduleSelectedDate
+                ? isSameDay(cell.date, scheduleSelectedDate)
+                : false
+
+              return (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => {
+                    if (isSelected) {
+                      setScheduleSelectedDate(null)
+                    } else {
+                      setScheduleSelectedDate(cell.date)
+                    }
+                  }}
+                  className={`min-h-[54px] p-1 rounded-md border text-left flex flex-col justify-between transition-all cursor-pointer ${
+                    !cell.isCurrentMonth
+                      ? "bg-slate-50/50 border-transparent opacity-45"
+                      : isSelected
+                        ? "bg-[#02275A]/5 border-[#02275A] ring-1 ring-[#02275A]"
+                        : cell.isToday
+                          ? "bg-amber-50/40 border-[#02275A]/40"
+                          : "bg-white border-slate-200/70 hover:border-slate-300"
+                  }`}
+                >
+                  <div className="flex items-center justify-between w-full">
+                    <span
+                      className={`text-xs font-semibold w-5 h-5 flex items-center justify-center rounded-full ${
+                        cell.isToday
+                          ? "bg-[#02275A] text-white"
+                          : "text-slate-700"
+                      }`}
                     >
-                      Cancel
-                    </button>
-                    <button type="submit" className={ui.btnPrimary}>
-                      Save changes
-                    </button>
-                  </div>
-                </form>
-              </li>
-            ) : (
-              <li key={ev.id} className="flex items-start gap-3 px-4 py-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium text-slate-900">{ev.title}</span>
-                    <span className={`${ui.badge} bg-slate-100 text-slate-700`}>
-                      {ev.category}
+                      {cell.dayNumber}
                     </span>
-                    {ev.isToday && (
-                      <span className={`${ui.badge} bg-amber-100 text-amber-800`}>
-                        Today
+                    {dayEvents.length > 0 && (
+                      <span className="text-[10px] font-bold text-[#02275A] bg-[#02275A]/10 px-1 rounded">
+                        {dayEvents.length}
                       </span>
                     )}
                   </div>
-                  <p className="text-sm text-slate-500">
-                    {[ev.date, ev.time, ev.location].filter(Boolean).join(" · ")}
-                  </p>
-                  {ev.description && (
-                    <p className="mt-0.5 line-clamp-2 text-sm text-slate-500">
-                      {ev.description}
+
+                  {/* Multi-day & single-day event pills */}
+                  <div className="w-full space-y-0.5 mt-1">
+                    {cellMulti.slice(0, 2).map(({ event, pos }) => (
+                      <div
+                        key={event.id}
+                        className={`text-[9px] leading-tight font-semibold truncate px-1 py-0.5 bg-purple-100 text-purple-900 border-purple-300 ${
+                          pos === "start"
+                            ? "rounded-l border-l-2"
+                            : pos === "end"
+                              ? "rounded-r border-r-2"
+                              : ""
+                        }`}
+                      >
+                        {pos === "start" || cell.date.getDay() === 0
+                          ? event.title
+                          : "\u00A0"}
+                      </div>
+                    ))}
+                    {dayEvents
+                      .filter((ev) => !getEventDateSpan(ev).isMultiDay)
+                      .slice(0, 1)
+                      .map((ev) => (
+                        <div
+                          key={ev.id}
+                          className="text-[9px] leading-tight font-medium truncate px-1 py-0.5 rounded bg-blue-50 text-[#02275A]"
+                        >
+                          {ev.title}
+                        </div>
+                      ))}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        {showAddEvent && (
+          <form
+            onSubmit={handleAddEventSubmit}
+            className={`${ui.card} ${ui.cardBody} space-y-3`}
+          >
+            <h2 className={ui.sectionTitle}>New schedule item</h2>
+            {renderEventFields(
+              "new-event",
+              {
+                title: eventTitle,
+                date: eventDate,
+                endDate: eventEndDate,
+                isMultiDay: eventIsMultiDay,
+                time: eventTime,
+                location: eventLocation,
+                category: eventCategory,
+                description: eventDescription,
+                isToday: eventIsToday,
+              },
+              {
+                title: setEventTitle,
+                date: setEventDate,
+                endDate: setEventEndDate,
+                isMultiDay: setEventIsMultiDay,
+                time: setEventTime,
+                location: setEventLocation,
+                category: setEventCategory,
+                description: setEventDescription,
+                isToday: setEventIsToday,
+              },
+            )}
+            <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
+              <button
+                type="button"
+                onClick={() => setShowAddEvent(false)}
+                className={ui.btnSecondary}
+              >
+                Cancel
+              </button>
+              <button type="submit" className={ui.btnPrimary}>
+                Add to schedule
+              </button>
+            </div>
+          </form>
+        )}
+
+        {filteredEvents.length === 0 ? (
+          <div className={ui.empty}>
+            {scheduleSelectedDate
+              ? `No events scheduled on ${formatEventDate(scheduleSelectedDate, "short")}.`
+              : "No schedule items yet. Add one above, or import a calendar (.ics) file."}
+          </div>
+        ) : (
+          <ul className={`${ui.card} divide-y divide-slate-100`}>
+            {filteredEvents.map((ev) => {
+              const span = getEventDateSpan(ev)
+              const displayDate = getEventDisplayDate(ev)
+
+              return editingEventId === ev.id ? (
+                <li key={ev.id}>
+                  <form
+                    onSubmit={handleSaveEditEvent}
+                    className="space-y-3 bg-slate-50 px-4 py-4"
+                  >
+                    {renderEventFields(
+                      `edit-${ev.id}`,
+                      {
+                        title: editEventTitle,
+                        date: editEventDate,
+                        endDate: editEventEndDate,
+                        isMultiDay: editEventIsMultiDay,
+                        time: editEventTime,
+                        location: editEventLocation,
+                        category: editEventCategory,
+                        description: editEventDescription,
+                        isToday: editEventIsToday,
+                      },
+                      {
+                        title: setEditEventTitle,
+                        date: setEditEventDate,
+                        endDate: setEditEventEndDate,
+                        isMultiDay: setEditEventIsMultiDay,
+                        time: setEditEventTime,
+                        location: setEditEventLocation,
+                        category: setEditEventCategory,
+                        description: setEditEventDescription,
+                        isToday: setEditEventIsToday,
+                      },
+                    )}
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditingEventId(null)}
+                        className={ui.btnSecondary}
+                      >
+                        Cancel
+                      </button>
+                      <button type="submit" className={ui.btnPrimary}>
+                        Save changes
+                      </button>
+                    </div>
+                  </form>
+                </li>
+              ) : (
+                <li key={ev.id} className="flex items-start gap-3 px-4 py-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium text-slate-900">
+                        {ev.title}
+                      </span>
+                      <span className={`${ui.badge} bg-slate-100 text-slate-700`}>
+                        {ev.category}
+                      </span>
+                      {span.isMultiDay && (
+                        <span
+                          className={`${ui.badge} bg-purple-100 text-purple-800 inline-flex items-center gap-1`}
+                        >
+                          <CalendarRange className="w-3 h-3" />
+                          Multi-day ({span.totalDays} days)
+                        </span>
+                      )}
+                      {ev.isToday && (
+                        <span className={`${ui.badge} bg-amber-100 text-amber-800`}>
+                          Today
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm text-slate-500">
+                      {[displayDate, ev.time, ev.location]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </p>
-                  )}
-                </div>
-                <div className="flex flex-shrink-0 items-center gap-0.5">
-                  <button
-                    type="button"
-                    onClick={() => engine.updateEvent(ev.id, { isToday: !ev.isToday })}
-                    className="hidden sm:inline-flex mr-1 rounded-md px-2.5 py-1.5 text-sm font-medium text-[#02275A] hover:bg-slate-100 cursor-pointer"
-                    title='Show or hide this event under "Happening today"'
-                  >
-                    {ev.isToday ? "Unmark today" : "Mark as today"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleStartEditEvent(ev)}
-                    className={ui.iconBtn}
-                    title="Edit"
-                    aria-label="Edit event"
-                  >
-                    <Pencil className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (confirm(`Delete "${ev.title}"?`)) engine.removeEvent(ev.id)
-                    }}
-                    className={ui.iconBtnDanger}
-                    title="Delete"
-                    aria-label="Delete event"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </li>
-            ),
-          )}
-        </ul>
-      )}
-    </>
-  )
+                    {ev.description && (
+                      <p className="mt-0.5 line-clamp-2 text-sm text-slate-500">
+                        {ev.description}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex flex-shrink-0 items-center gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        engine.updateEvent(ev.id, { isToday: !ev.isToday })
+                      }
+                      className="hidden sm:inline-flex mr-1 rounded-md px-2.5 py-1.5 text-sm font-medium text-[#02275A] hover:bg-slate-100 cursor-pointer"
+                      title='Show or hide this event under "Happening today"'
+                    >
+                      {ev.isToday ? "Unmark today" : "Mark as today"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleStartEditEvent(ev)}
+                      className={ui.iconBtn}
+                      title="Edit"
+                      aria-label="Edit event"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (confirm(`Delete "${ev.title}"?`))
+                          engine.removeEvent(ev.id)
+                      }}
+                      className={ui.iconBtnDanger}
+                      title="Delete"
+                      aria-label="Delete event"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </>
+    )
+  }
 
   // ---------------------------------------------------------------- Labs
   const renderLabsSection = () => (

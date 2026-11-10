@@ -45,6 +45,18 @@ import { parseIcs } from "../utils/ics"
 import LabHoursIntervalPicker from "./LabHoursIntervalPicker"
 import { getEffectiveLabStatus } from "../utils/labHours"
 import LabClassScheduleManager from "./LabClassScheduleManager"
+import EventDatePicker from "./EventDatePicker"
+import {
+  parseEventDate,
+  formatEventDate,
+  endOfDay,
+  getEventDateSpan,
+  getEventDisplayDate,
+  isSameDay,
+  isSlideExpiredByDate,
+  isSlideVisibleOnTv,
+  sortEventsChronologically,
+} from "../utils/datePickerUtils"
 
 function HoursField({
   label,
@@ -114,11 +126,13 @@ export default function AdminControllerPanel({
   // New Event form state
   const [showAddEvent, setShowAddEvent] = useState(false)
   const [eventTitle, setEventTitle] = useState("")
-  const [eventDate, setEventDate] = useState("FRI, OCT 10")
-  const [eventTime, setEventTime] = useState("3:00 PM – 5:00 PM")
+  const [eventDate, setEventDate] = useState("")
+  const [eventEndDate, setEventEndDate] = useState("")
+  const [eventIsMultiDay, setEventIsMultiDay] = useState(false)
+  const [eventTime, setEventTime] = useState("")
   const [eventLocation, setEventLocation] = useState("")
   const [eventCategory, setEventCategory] =
-    useState<EventAnnouncement["category"]>("Workshop")
+    useState<EventAnnouncement["category"]>("Department Event")
   const [eventDescription, setEventDescription] = useState("")
   const [eventIsToday, setEventIsToday] = useState(false)
 
@@ -126,6 +140,8 @@ export default function AdminControllerPanel({
   const [editingEventId, setEditingEventId] = useState<string | null>(null)
   const [editEventTitle, setEditEventTitle] = useState("")
   const [editEventDate, setEditEventDate] = useState("")
+  const [editEventEndDate, setEditEventEndDate] = useState("")
+  const [editEventIsMultiDay, setEditEventIsMultiDay] = useState(false)
   const [editEventTime, setEditEventTime] = useState("")
   const [editEventLocation, setEditEventLocation] = useState("")
   const [editEventCategory, setEditEventCategory] =
@@ -144,6 +160,7 @@ export default function AdminControllerPanel({
   const [mediaCategory, setMediaCategory] = useState("Campus Announcement")
   const [mediaCaption, setMediaCaption] = useState("")
   const [mediaDuration, setMediaDuration] = useState<number>(8)
+  const [mediaHideAfterDate, setMediaHideAfterDate] = useState("")
   const [isUploadingMedia, setIsUploadingMedia] = useState(false)
   const [mediaUploadSuccess, setMediaUploadSuccess] = useState<string | null>(
     null,
@@ -156,6 +173,7 @@ export default function AdminControllerPanel({
   const [editSlideCategory, setEditSlideCategory] = useState("")
   const [editSlideCaption, setEditSlideCaption] = useState("")
   const [editSlideDuration, setEditSlideDuration] = useState<number>(8)
+  const [editSlideHideAfterDate, setEditSlideHideAfterDate] = useState("")
 
   // .ics import state
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -215,6 +233,13 @@ export default function AdminControllerPanel({
 
     setIsUploadingMedia(true)
     try {
+      const parsedHideAfter = mediaHideAfterDate.trim()
+        ? parseEventDate(mediaHideAfterDate)
+        : null
+      const hideAfterISO = parsedHideAfter
+        ? endOfDay(parsedHideAfter).toISOString()
+        : undefined
+
       await engine.addSlide(
         {
           title: mediaTitle.trim(),
@@ -226,6 +251,8 @@ export default function AdminControllerPanel({
           durationSeconds:
             Number(mediaDuration) || (mediaType === "video" ? 15 : 8),
           fileName: mediaFile.name,
+          hideAfterDate: mediaHideAfterDate.trim() || undefined,
+          hideAfterISO,
         },
         mediaFile,
       )
@@ -240,6 +267,7 @@ export default function AdminControllerPanel({
       setMediaTitle("")
       setMediaSubtitle("")
       setMediaCaption("")
+      setMediaHideAfterDate("")
       setShowAddMedia(false)
       setTimeout(() => setMediaUploadSuccess(null), 5000)
     } catch (err) {
@@ -415,24 +443,80 @@ export default function AdminControllerPanel({
   const handleAddEventSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!eventTitle.trim()) return
+    const parsedStart = parseEventDate(eventDate)
+    const parsedEnd =
+      eventIsMultiDay && eventEndDate.trim()
+        ? parseEventDate(eventEndDate)
+        : parsedStart
+
+    const startDt =
+      parsedStart && parsedEnd && parsedEnd.getTime() < parsedStart.getTime()
+        ? parsedEnd
+        : parsedStart
+    const endDt =
+      parsedStart && parsedEnd && parsedEnd.getTime() < parsedStart.getTime()
+        ? parsedStart
+        : parsedEnd || parsedStart
+
+    const startISO = startDt
+      ? new Date(
+          startDt.getFullYear(),
+          startDt.getMonth(),
+          startDt.getDate(),
+          0,
+          0,
+          0,
+        ).toISOString()
+      : undefined
+    const endISO = endDt
+      ? new Date(
+          endDt.getFullYear(),
+          endDt.getMonth(),
+          endDt.getDate(),
+          23,
+          59,
+          59,
+        ).toISOString()
+      : undefined
+
+    const isMulti =
+      Boolean(eventIsMultiDay && eventEndDate.trim()) &&
+      Boolean(startDt && endDt && !isSameDay(startDt, endDt))
+
     engine.addEvent({
       title: eventTitle.trim(),
       date: eventDate.trim(),
+      endDate: isMulti ? eventEndDate.trim() : undefined,
+      isMultiDay: isMulti,
       time: eventTime.trim(),
       location: eventLocation.trim(),
       category: eventCategory,
       isToday: eventIsToday,
       description: eventDescription.trim() || undefined,
+      startISO,
+      endISO,
     })
     setEventTitle("")
+    setEventDate("")
+    setEventEndDate("")
+    setEventIsMultiDay(false)
+    setEventTime("")
+    setEventLocation("")
     setEventDescription("")
+    setEventIsToday(false)
     setShowAddEvent(false)
   }
 
   const handleStartEditEvent = (ev: EventAnnouncement) => {
+    const span = getEventDateSpan(ev)
     setEditingEventId(ev.id)
     setEditEventTitle(ev.title)
     setEditEventDate(ev.date)
+    setEditEventEndDate(
+      ev.endDate ||
+        (span.isMultiDay && span.endDate ? formatEventDate(span.endDate) : ""),
+    )
+    setEditEventIsMultiDay(span.isMultiDay)
     setEditEventTime(ev.time)
     setEditEventLocation(ev.location)
     setEditEventCategory(ev.category)
@@ -443,14 +527,58 @@ export default function AdminControllerPanel({
   const handleSaveEditEvent = (e: React.FormEvent) => {
     e.preventDefault()
     if (!editingEventId || !editEventTitle.trim()) return
+    const parsedStart = parseEventDate(editEventDate)
+    const parsedEnd =
+      editEventIsMultiDay && editEventEndDate.trim()
+        ? parseEventDate(editEventEndDate)
+        : parsedStart
+
+    const startDt =
+      parsedStart && parsedEnd && parsedEnd.getTime() < parsedStart.getTime()
+        ? parsedEnd
+        : parsedStart
+    const endDt =
+      parsedStart && parsedEnd && parsedEnd.getTime() < parsedStart.getTime()
+        ? parsedStart
+        : parsedEnd || parsedStart
+
+    const startISO = startDt
+      ? new Date(
+          startDt.getFullYear(),
+          startDt.getMonth(),
+          startDt.getDate(),
+          0,
+          0,
+          0,
+        ).toISOString()
+      : undefined
+    const endISO = endDt
+      ? new Date(
+          endDt.getFullYear(),
+          endDt.getMonth(),
+          endDt.getDate(),
+          23,
+          59,
+          59,
+        ).toISOString()
+      : undefined
+
+    const isMulti =
+      Boolean(editEventIsMultiDay && editEventEndDate.trim()) &&
+      Boolean(startDt && endDt && !isSameDay(startDt, endDt))
+
     engine.updateEvent(editingEventId, {
       title: editEventTitle.trim(),
       date: editEventDate.trim(),
+      endDate: isMulti ? editEventEndDate.trim() : undefined,
+      isMultiDay: isMulti,
       time: editEventTime.trim(),
       location: editEventLocation.trim(),
       category: editEventCategory,
       description: editEventDescription.trim() || undefined,
       isToday: editEventIsToday,
+      startISO,
+      endISO,
     })
     setEditingEventId(null)
   }
@@ -464,17 +592,26 @@ export default function AdminControllerPanel({
     setEditSlideDuration(
       slide.durationSeconds || (slide.mediaType === "video" ? 15 : 8),
     )
+    setEditSlideHideAfterDate(slide.hideAfterDate || "")
   }
 
   const handleSaveEditSlide = (e: React.FormEvent) => {
     e.preventDefault()
     if (!editingSlideId || !editSlideTitle.trim()) return
+    const parsedHideAfter = editSlideHideAfterDate.trim()
+      ? parseEventDate(editSlideHideAfterDate)
+      : null
+    const hideAfterISO = parsedHideAfter
+      ? endOfDay(parsedHideAfter).toISOString()
+      : undefined
     engine.updateSlide(editingSlideId, {
       title: editSlideTitle.trim(),
       subtitle: editSlideSubtitle.trim(),
       category: editSlideCategory.trim() || "Spotlight",
       caption: editSlideCaption.trim() || undefined,
       durationSeconds: editSlideDuration > 0 ? editSlideDuration : 8,
+      hideAfterDate: editSlideHideAfterDate.trim() || undefined,
+      hideAfterISO,
     })
     setEditingSlideId(null)
   }
@@ -1304,6 +1441,28 @@ export default function AdminControllerPanel({
                     </span>
                   </div>
                 </div>
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[10px] text-slate-400 uppercase font-bold">
+                      Hide After Date (Optional)
+                    </label>
+                    {mediaHideAfterDate && (
+                      <button
+                        type="button"
+                        onClick={() => setMediaHideAfterDate("")}
+                        className="text-[10px] text-sky-400 hover:text-sky-300 cursor-pointer"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  <EventDatePicker
+                    value={mediaHideAfterDate}
+                    onChange={(val) => setMediaHideAfterDate(val)}
+                    placeholder="No expiration"
+                    theme="dark"
+                  />
+                </div>
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-700">
@@ -1355,7 +1514,9 @@ export default function AdminControllerPanel({
 
             <div className="space-y-1.5 max-h-60 overflow-y-auto">
               {(state.slides || []).map((slide, idx) => {
-                const isCurrent = state.activeSlideIndex === idx
+                const isExpiredByDate = isSlideExpiredByDate(slide)
+                const isVisibleOnTv = isSlideVisibleOnTv(slide)
+                const isCurrent = state.activeSlideIndex === idx && isVisibleOnTv
                 const isVid =
                   slide.mediaType === "video" ||
                   Boolean(
@@ -1370,7 +1531,9 @@ export default function AdminControllerPanel({
                       className={`p-2 rounded-lg border flex items-center justify-between gap-2 text-xs ${
                         isCurrent
                           ? "bg-blue-950/40 border-[#02275A] ring-1 ring-[#02275A]"
-                          : "bg-slate-800/60 border-slate-700"
+                          : !isVisibleOnTv
+                            ? "bg-slate-900/60 border-slate-800 opacity-60"
+                            : "bg-slate-800/60 border-slate-700"
                       }`}
                     >
                       <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -1382,7 +1545,7 @@ export default function AdminControllerPanel({
                           )}
                         </div>
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-center gap-1 flex-wrap">
                             <span className="text-[9px] font-bold text-sky-400">
                               #{idx + 1}
                             </span>
@@ -1392,6 +1555,21 @@ export default function AdminControllerPanel({
                             {isCurrent && (
                               <span className="text-[9px] font-extrabold text-emerald-400 animate-pulse">
                                 LIVE
+                              </span>
+                            )}
+                            {slide.hidden && (
+                              <span className="text-[8.5px] font-bold px-1 rounded bg-slate-700 text-slate-300">
+                                HIDDEN
+                              </span>
+                            )}
+                            {isExpiredByDate && (
+                              <span className="text-[8.5px] font-bold px-1 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                PAST {slide.hideAfterDate}
+                              </span>
+                            )}
+                            {!isExpiredByDate && slide.hideAfterDate && (
+                              <span className="text-[8.5px] font-bold px-1 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30">
+                                Hide after {slide.hideAfterDate}
                               </span>
                             )}
                           </div>
@@ -1533,6 +1711,29 @@ export default function AdminControllerPanel({
                         </div>
 
                         <div>
+                          <div className="flex items-center justify-between mb-0.5">
+                            <label className="text-[9px] text-slate-400 uppercase font-bold">
+                              Hide After Date (Optional)
+                            </label>
+                            {editSlideHideAfterDate && (
+                              <button
+                                type="button"
+                                onClick={() => setEditSlideHideAfterDate("")}
+                                className="text-[9px] text-sky-400 hover:text-sky-300 cursor-pointer"
+                              >
+                                Clear
+                              </button>
+                            )}
+                          </div>
+                          <EventDatePicker
+                            value={editSlideHideAfterDate}
+                            onChange={(val) => setEditSlideHideAfterDate(val)}
+                            placeholder="No expiration"
+                            theme="dark"
+                          />
+                        </div>
+
+                        <div>
                           <label className="text-[9px] text-slate-400 uppercase font-bold block mb-0.5">
                             Description / Caption
                           </label>
@@ -1572,12 +1773,12 @@ export default function AdminControllerPanel({
           </div>
         </div>
 
-        {/* 5. Add / Manage Event Announcements */}
+        {/* 5. Add / Manage Schedule */}
         <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-700/80 shadow-md space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="font-extrabold text-sm text-white uppercase tracking-wider flex items-center gap-2">
-              <Clock className="w-4 h-4 text-emerald-400" />
-              Event Announcements ({state.events.length})
+              <Calendar className="w-4 h-4 text-emerald-400" />
+              Schedule ({state.events.length})
             </h3>
             <div className="flex items-center gap-1.5">
               <input
@@ -1599,7 +1800,7 @@ export default function AdminControllerPanel({
                 className="py-1 px-2.5 rounded-lg bg-[#02275A] hover:bg-[#02275A]/80 text-white text-xs font-bold flex items-center gap-1 cursor-pointer transition-all"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>{showAddEvent ? "Cancel" : "New Event"}</span>
+                <span>{showAddEvent ? "Cancel" : "Add to Schedule"}</span>
               </button>
             </div>
           </div>
@@ -1629,7 +1830,7 @@ export default function AdminControllerPanel({
             >
               <div>
                 <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
-                  Event Title
+                  Title
                 </label>
                 <input
                   type="text"
@@ -1641,20 +1842,51 @@ export default function AdminControllerPanel({
                 />
               </div>
 
+              <div className="flex items-center gap-2 py-1">
+                <input
+                  type="checkbox"
+                  id="eventMultiDay"
+                  checked={eventIsMultiDay}
+                  onChange={(e) => setEventIsMultiDay(e.target.checked)}
+                  className="rounded text-[#02275A]"
+                />
+                <label
+                  htmlFor="eventMultiDay"
+                  className="text-xs text-sky-300 font-semibold cursor-pointer"
+                >
+                  Multi-day event (shows across multiple days on calendar)
+                </label>
+              </div>
+
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
-                    Date
+                    {eventIsMultiDay ? "Start Date" : "Date"}
                   </label>
-                  <input
-                    type="text"
-                    required
+                  <EventDatePicker
                     value={eventDate}
-                    onChange={(e) => setEventDate(e.target.value)}
-                    className="w-full px-3 py-1.5 rounded bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none"
+                    onChange={(val) => setEventDate(val)}
+                    onDateSelect={(_date, _formatted, isToday) => {
+                      if (isToday) setEventIsToday(true)
+                    }}
+                    required
+                    theme="dark"
                   />
                 </div>
-                <div>
+                {eventIsMultiDay && (
+                  <div>
+                    <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
+                      End Date
+                    </label>
+                    <EventDatePicker
+                      value={eventEndDate}
+                      onChange={(val) => setEventEndDate(val)}
+                      required={eventIsMultiDay}
+                      theme="dark"
+                    />
+                  </div>
+                )}
+                <div className={eventIsMultiDay ? "col-span-2" : ""}>
                   <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
                     Time
                   </label>
@@ -1663,6 +1895,7 @@ export default function AdminControllerPanel({
                     required
                     value={eventTime}
                     onChange={(e) => setEventTime(e.target.value)}
+                    placeholder="e.g. 3:00 PM – 5:00 PM or All Day"
                     className="w-full px-3 py-1.5 rounded bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none"
                   />
                 </div>
@@ -1690,6 +1923,8 @@ export default function AdminControllerPanel({
                     onChange={(e) => setEventCategory(e.target.value as any)}
                     className="w-full px-3 py-1.5 rounded bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none"
                   >
+                    <option value="Department Event">Department Event</option>
+                    <option value="Campus Events">Campus Events</option>
                     <option value="Capstone">Capstone</option>
                     <option value="Workshop">Workshop</option>
                     <option value="Club">Club</option>
@@ -1708,7 +1943,7 @@ export default function AdminControllerPanel({
                   rows={2}
                   value={eventDescription}
                   onChange={(e) => setEventDescription(e.target.value)}
-                  placeholder="Details shown on TV announcement ticker & cards..."
+                  placeholder="Details shown on TV schedule cards..."
                   className="w-full px-3 py-1.5 rounded bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-[#02275A] resize-none"
                 />
               </div>
@@ -1725,7 +1960,7 @@ export default function AdminControllerPanel({
                   htmlFor="eventToday"
                   className="text-xs text-white font-medium cursor-pointer"
                 >
-                  Feature as "Happening Today"
+                  Feature as "Happening Today / Ongoing"
                 </label>
               </div>
 
@@ -1733,20 +1968,22 @@ export default function AdminControllerPanel({
                 type="submit"
                 className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md transition-all cursor-pointer"
               >
-                Publish Announcement (Syncs to All Screens)
+                Publish to Schedule (Syncs to All Screens)
               </button>
             </form>
           )}
 
-          {/* Quick list of current events with inline edit & delete */}
+          {/* Quick list of current schedule items with inline edit & delete */}
           <div className="space-y-2 max-h-72 overflow-y-auto">
             {state.events.length === 0 ? (
               <p className="text-xs text-slate-500 italic p-2 text-center">
-                No event announcements active.
+                No schedule items active.
               </p>
             ) : (
-              state.events.map((ev) => {
+              sortEventsChronologically(state.events).map((ev) => {
                 const isEditing = editingEventId === ev.id
+                const span = getEventDateSpan(ev)
+                const displayDate = getEventDisplayDate(ev)
 
                 if (isEditing) {
                   return (
@@ -1758,7 +1995,7 @@ export default function AdminControllerPanel({
                       <div className="flex items-center justify-between pb-1 border-b border-slate-700">
                         <span className="text-[11px] font-bold text-emerald-400 flex items-center gap-1">
                           <Pencil className="w-3 h-3" />
-                          <span>Edit Event</span>
+                          <span>Edit Schedule Item</span>
                         </span>
                         <button
                           type="button"
@@ -1771,7 +2008,7 @@ export default function AdminControllerPanel({
 
                       <div>
                         <label className="text-[9px] text-slate-400 uppercase font-bold block mb-0.5">
-                          Event Title
+                          Title
                         </label>
                         <input
                           type="text"
@@ -1782,20 +2019,53 @@ export default function AdminControllerPanel({
                         />
                       </div>
 
+                      <div className="flex items-center gap-2 py-0.5">
+                        <input
+                          type="checkbox"
+                          id={`adminEventMultiDay-${ev.id}`}
+                          checked={editEventIsMultiDay}
+                          onChange={(e) =>
+                            setEditEventIsMultiDay(e.target.checked)
+                          }
+                          className="rounded text-[#02275A]"
+                        />
+                        <label
+                          htmlFor={`adminEventMultiDay-${ev.id}`}
+                          className="text-[11px] text-sky-300 font-semibold cursor-pointer"
+                        >
+                          Multi-day event
+                        </label>
+                      </div>
+
                       <div className="grid grid-cols-2 gap-1.5">
                         <div>
                           <label className="text-[9px] text-slate-400 uppercase font-bold block mb-0.5">
-                            Date
+                            {editEventIsMultiDay ? "Start Date" : "Date"}
                           </label>
-                          <input
-                            type="text"
-                            required
+                          <EventDatePicker
                             value={editEventDate}
-                            onChange={(e) => setEditEventDate(e.target.value)}
-                            className="w-full px-2 py-1 rounded bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none"
+                            onChange={(val) => setEditEventDate(val)}
+                            onDateSelect={(_date, _formatted, isToday) => {
+                              if (isToday) setEditEventIsToday(true)
+                            }}
+                            required
+                            theme="dark"
                           />
                         </div>
-                        <div>
+                        {editEventIsMultiDay && (
+                          <div>
+                            <label className="text-[9px] text-slate-400 uppercase font-bold block mb-0.5">
+                              End Date
+                            </label>
+                            <EventDatePicker
+                              value={editEventEndDate}
+                              onChange={(val) => setEditEventEndDate(val)}
+                              required={editEventIsMultiDay}
+                              theme="dark"
+                            />
+                          </div>
+                        )}
+                        <div className={editEventIsMultiDay ? "col-span-2" : ""}>
                           <label className="text-[9px] text-slate-400 uppercase font-bold block mb-0.5">
                             Time
                           </label>
@@ -1835,6 +2105,12 @@ export default function AdminControllerPanel({
                             }
                             className="w-full px-2 py-1 rounded bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none"
                           >
+                            <option value="Department Event">
+                              Department Event
+                            </option>
+                            <option value="Campus Events">
+                              Campus Events
+                            </option>
                             <option value="Capstone">Capstone</option>
                             <option value="Workshop">Workshop</option>
                             <option value="Club">Club</option>
@@ -1874,7 +2150,7 @@ export default function AdminControllerPanel({
                           htmlFor={`adminEventToday-${ev.id}`}
                           className="text-[11px] text-white font-medium cursor-pointer"
                         >
-                          Feature as "Happening Today"
+                          Feature as "Happening Today / Ongoing"
                         </label>
                       </div>
 
@@ -1911,6 +2187,11 @@ export default function AdminControllerPanel({
                         <span className="text-[9px] font-semibold uppercase px-1 py-0.2 rounded bg-slate-700 text-sky-300">
                           {ev.category}
                         </span>
+                        {span.isMultiDay && (
+                          <span className="text-[9px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40 px-1 py-0.2 rounded uppercase">
+                            {span.totalDays} Days
+                          </span>
+                        )}
                         {ev.isToday && (
                           <span className="text-[9px] font-bold bg-amber-400 text-slate-950 px-1 py-0.2 rounded uppercase">
                             Today
@@ -1918,7 +2199,7 @@ export default function AdminControllerPanel({
                         )}
                       </div>
                       <div className="text-[10px] text-slate-400 mt-0.5">
-                        {ev.date} · {ev.time} · {ev.location}
+                        {displayDate} · {ev.time} · {ev.location}
                       </div>
                       {ev.description && (
                         <p className="text-[10px] text-slate-300/80 italic mt-1 line-clamp-2 bg-slate-900/50 p-1 rounded border border-slate-800">

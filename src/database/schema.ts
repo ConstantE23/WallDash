@@ -1,11 +1,11 @@
 /**
- * Hampton University Computer Science Digital Signage
- * Database Schema Definition
- * 
- * Provides unified schema definitions, store descriptors, index definitions,
- * relational constraints, and validation helpers for client-side storage (IndexedDB)
- * and server-side relational synchronization (PostgreSQL / SQLite).
- */
+* Hampton University Computer Science Digital Signage
+* Database Schema Definition
+* 
+* Provides unified schema definitions, store descriptors, index definitions,
+* relational constraints, and validation helpers for client-side storage (IndexedDB)
+* and server-side relational synchronization (PostgreSQL / SQLite).
+*/
 
 import type {
   SignageUser,
@@ -265,7 +265,7 @@ export const EVENTS_STORE_SCHEMA: StoreDescriptor<EventAnnouncement> = {
       name: "idx_category",
       keyPath: "category",
       unique: false,
-      description: "Event category (Capstone, Lecture, Workshop, Career, Hackathon)",
+      description: "Event category (Department Event, Campus Events, Capstone, Lecture, Workshop, Career, Hackathon)",
     },
     {
       name: "idx_uid",

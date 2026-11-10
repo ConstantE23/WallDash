@@ -19,6 +19,7 @@ import {
 import type { SlideItem, UrgentAlert } from "../types/signage"
 import { INITIAL_SLIDES } from "../data/initialData"
 import { getSlideLayout, getMediaStyle } from "../utils/slideLayout"
+import { isSlideVisibleOnTv } from "../utils/datePickerUtils"
 
 /**
  * Slide video that only plays while visible. The next slide's video preloads once
@@ -81,8 +82,8 @@ interface CenterDisplayProps {
 }
 
 export default function CenterDisplay({
-  slides = INITIAL_SLIDES,
-  activeSlideIndex,
+  slides: rawSlides = INITIAL_SLIDES,
+  activeSlideIndex: rawActiveSlideIndex,
   isPaused,
   urgentAlert,
   onSlideChange,
@@ -93,8 +94,20 @@ export default function CenterDisplay({
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [showQrModal, setShowQrModal] = useState(false)
   const [fitMode, setFitMode] = useState<"cover" | "contain">("cover")
+  const [nowMs, setNowMs] = useState(() => Date.now())
   const containerRef = useRef<HTMLDivElement>(null)
   const TICK_INTERVAL = 100
+
+  // Periodically refresh current time so slides with a "hide after date"
+  // automatically disappear after midnight on unattended TV screens.
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 60_000)
+    return () => clearInterval(id)
+  }, [])
+
+  const slides = rawSlides.filter((s) => isSlideVisibleOnTv(s, nowMs))
+  const activeSlideIndex =
+    slides.length > 0 ? rawActiveSlideIndex % slides.length : 0
 
   // Keep latest callback/index/duration in refs so parent re-renders
   // never restart the slide timer prematurely.
@@ -173,7 +186,7 @@ export default function CenterDisplay({
         </div>
         <div className="flex items-center gap-2 text-white/90 text-xs font-semibold">
           <span className="px-2 py-0.5 rounded bg-black/20 text-[10px] font-mono font-bold">
-            {activeSlideIndex + 1} / {slides.length}
+            {slides.length > 0 ? activeSlideIndex + 1 : 0} / {slides.length}
           </span>
         </div>
       </div>
@@ -490,7 +503,7 @@ export default function CenterDisplay({
             {/* Render flyer QR code or mock scanner */}
             <div className="p-3 bg-white border-2 border-[#02275A] rounded-xl shadow-inner mb-4">
               <img
-                src={slides[0].url}
+                src={(slides[0] || rawSlides[0] || INITIAL_SLIDES[0])?.url}
                 alt="Cyber QR Flyer"
                 className="w-48 h-48 object-contain rounded-lg"
               />
